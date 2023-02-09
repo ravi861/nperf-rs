@@ -60,11 +60,8 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
             StoreTrue,
             "[c] Start perf as client",
         );
-        args.refer(&mut udp).add_option(
-            &["-u", "--udp"],
-            StoreTrue,
-            "[c] Use UDP",
-        );
+        args.refer(&mut udp)
+            .add_option(&["-u", "--udp"], StoreTrue, "[c] Use UDP");
         args.refer(&mut port)
             .add_option(&["-p", "--port"], Store, "[s] Port server listen on");
         args.refer(&mut bindaddr).add_option(

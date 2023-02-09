@@ -1,5 +1,6 @@
 use crate::params::PerfParams;
 use crate::test::{PerfStream, Test, TestState};
+use mio::net::UdpSocket;
 use mio::{net::TcpStream, Events, Interest, Poll, Token, Waker};
 
 use std::net::SocketAddr;
@@ -39,8 +40,6 @@ impl ClientImpl {
         let waker = Waker::new(poll.registry(), CONTROL)?;
         let mut events = Events::with_capacity(1024);
 
-        let zero_vec: Vec<u8> = vec![1; 128 * 1024];
-
         loop {
             poll.poll(&mut events, Some(Duration::from_millis(100)))?;
             for event in events.iter() {
@@ -62,43 +61,76 @@ impl ClientImpl {
                             // connect to the server listener
                             for _ in 0..test.num_streams() {
                                 thread::sleep(Duration::from_millis(10));
-                                let stream = TcpStream::connect(self.server_addr)?;
-                                print_stream(&stream);
-                                test.streams.push(PerfStream::new(stream));
+                                if test.udp() {
+                                    let stream =
+                                        UdpSocket::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+                                    stream.connect(self.server_addr).unwrap();
+                                    println!("{} {}", stream.local_addr()?, stream.peer_addr()?);
+                                    stream.send("hello".as_bytes())?;
+                                    test.streams.push(PerfStream::new_udp(stream));
+                                } else {
+                                    let stream = TcpStream::connect(self.server_addr)?;
+                                    print_stream(&stream);
+                                    test.streams.push(PerfStream::new(stream));
+                                }
                             }
                             test.transition(TestState::Wait);
                         }
                         TestState::TestRunning => {}
                         TestState::TestStart => {
-                            for pstream in &mut test.streams {
-                                match pstream.write(make_cookie().as_bytes()) {
-                                    Ok(_) => {}
-                                    Err(_e) => {
-                                        continue;
+                            if test.udp() {
+                                for pstream in &mut test.streams {
+                                    match pstream.write_buf(make_cookie().as_bytes()) {
+                                        Ok(_) => {}
+                                        Err(_e) => {
+                                            continue;
+                                        }
                                     }
+                                    poll.registry().register(
+                                        pstream.udp_stream.as_mut().unwrap(),
+                                        STREAM,
+                                        Interest::WRITABLE,
+                                    )?;
+                                    pstream.curr_time = Instant::now();
                                 }
+                                println!(
+                                    "Starting Test: protocol: UDP, {} stream",
+                                    test.num_streams()
+                                );
+                            } else {
+                                for pstream in &mut test.streams {
+                                    match pstream.write_buf(make_cookie().as_bytes()) {
+                                        Ok(_) => {}
+                                        Err(_e) => {
+                                            continue;
+                                        }
+                                    }
+                                    poll.registry().register(
+                                        pstream.stream.as_mut().unwrap(),
+                                        STREAM,
+                                        Interest::WRITABLE,
+                                    )?;
+                                    pstream.curr_time = Instant::now();
+                                }
+                                println!(
+                                    "Starting Test: protocol: TCP, {} stream",
+                                    test.num_streams()
+                                );
                             }
                             test.transition(TestState::TestRunning);
                             send_state(&self.ctrl, TestState::TestRunning);
-                            for pstream in &mut test.streams {
-                                poll.registry().register(
-                                    &mut pstream.stream,
-                                    STREAM,
-                                    Interest::READABLE | Interest::WRITABLE,
-                                )?;
-                            }
-                            println!(
-                                "Starting Test: protocol: TCP, {} stream",
-                                test.num_streams()
-                            );
                             test.start = Instant::now();
-                            for pstream in &mut test.streams {
-                                pstream.curr_time = Instant::now();
-                            }
                         }
                         TestState::TestEnd => {
-                            for pstream in &test.streams {
-                                pstream.stream.shutdown(std::net::Shutdown::Both)?;
+                            if test.udp() {
+                            } else {
+                                for pstream in &test.streams {
+                                    pstream
+                                        .stream
+                                        .as_ref()
+                                        .unwrap()
+                                        .shutdown(std::net::Shutdown::Both)?;
+                                }
                             }
                             self.ctrl.shutdown(std::net::Shutdown::Both)?;
                             test.print_stats();
@@ -121,9 +153,11 @@ impl ClientImpl {
                         TestState::TestRunning => {
                             if event.is_writable() {
                                 let mut try_later = false;
+                                let udp = test.udp();
                                 while try_later == false {
                                     for pstream in &mut test.streams {
-                                        match pstream.write(zero_vec.as_slice()) {
+                                        // thread::sleep(Duration::from_millis(5));
+                                        match pstream.write() {
                                             Ok(n) => {
                                                 pstream.bytes += n as u64;
                                                 pstream.blks += 1;
@@ -141,14 +175,25 @@ impl ClientImpl {
                                             pstream.curr_bytes = 0;
                                             pstream.curr_blks = 0;
                                             pstream.curr_iter += 1;
+                                            if udp {
+                                                try_later = true;
+                                            }
                                         }
                                     }
                                 }
                                 if test.start.elapsed().as_millis() > 10000 {
                                     test.transition(TestState::TestEnd);
                                     send_state(&self.ctrl, TestState::TestEnd);
-                                    for pstream in &mut test.streams {
-                                        poll.registry().deregister(&mut pstream.stream)?;
+                                    if test.udp() {
+                                        for pstream in &mut test.streams {
+                                            poll.registry()
+                                                .deregister(pstream.udp_stream.as_mut().unwrap())?;
+                                        }
+                                    } else {
+                                        for pstream in &mut test.streams {
+                                            poll.registry()
+                                                .deregister(pstream.stream.as_mut().unwrap())?;
+                                        }
                                     }
                                     waker.wake()?;
                                 }

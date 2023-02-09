@@ -1,11 +1,15 @@
-use mio::{net::TcpStream, Token};
+use mio::{
+    net::{TcpStream, UdpSocket},
+    Token,
+};
 use serde::{Deserialize, Serialize};
 use serde_json;
 use std::{
     fmt::Display,
+    io::{self, Error, Read, Write},
     ops::Sub,
-    os::unix::prelude::{AsRawFd, RawFd},
-    time::{Duration, Instant}, io::{self, Read, Error, Write},
+    os::unix::prelude::AsRawFd,
+    time::{Duration, Instant},
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -40,16 +44,6 @@ impl TestState {
 
 pub const DEFAULT_SESSION_TIMEOUT: u32 = 120;
 
-trait Growler {
-    fn as_raw_f(&self) -> RawFd;
-}
-
-impl Growler for TcpStream {
-    fn as_raw_f(&self) -> RawFd {
-        AsRawFd::as_raw_fd(self)
-    }
-}
-
 pub struct Statistics {
     iter: u64,
     start: Instant,
@@ -72,7 +66,9 @@ impl Display for Statistics {
 }
 pub struct PerfStream {
     // pub stream: Box<dyn Growler>,
-    pub stream: TcpStream,
+    pub conn: Conn,
+    pub stream: Option<TcpStream>,
+    pub udp_stream: Option<UdpSocket>,
     pub created: Instant,
     pub start: Instant,
     pub bytes: u64,
@@ -83,12 +79,47 @@ pub struct PerfStream {
     pub curr_blks: u64,
     pub curr_iter: u64,
 }
+impl Display for PerfStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let fd = match self.conn {
+            Conn::TCP => self.stream.as_ref().unwrap().as_raw_fd(),
+            Conn::UDP => self.udp_stream.as_ref().unwrap().as_raw_fd(),
+            _ => 0,
+        };
+        write!(
+            f,
+            "[{:>3}] {:>3}s {} {} bytes {} blocks",
+            fd,
+            Instant::now().sub(self.start).as_secs(),
+            Test::kmg(self.bytes, self.start, Instant::now()),
+            self.bytes,
+            self.blks
+        )
+    }
+}
 
 impl PerfStream {
     pub fn new(stream: TcpStream) -> PerfStream {
         PerfStream {
-            // stream: Box::from(stream),
-            stream: stream,
+            conn: Conn::TCP,
+            stream: Some(stream),
+            udp_stream: None,
+            created: Instant::now(),
+            start: Instant::now(),
+            bytes: 0,
+            blks: 0,
+            stats: Vec::new(),
+            curr_time: Instant::now(),
+            curr_bytes: 0,
+            curr_blks: 0,
+            curr_iter: 0,
+        }
+    }
+    pub fn new_udp(stream: UdpSocket) -> PerfStream {
+        PerfStream {
+            conn: Conn::UDP,
+            stream: None,
+            udp_stream: Some(stream),
             created: Instant::now(),
             start: Instant::now(),
             bytes: 0,
@@ -108,14 +139,35 @@ impl PerfStream {
             bytes: self.curr_bytes,
             blks: self.curr_blks,
         };
-        println!("[{:>3}] {}", self.stream.as_raw_fd(), stat);
+        match self.conn {
+            Conn::TCP => {
+                println!(
+                    "[{:>3}] {}",
+                    self.stream.as_ref().unwrap().as_raw_fd(),
+                    stat
+                );
+            }
+            Conn::UDP => {
+                println!(
+                    "[{:>3}] {}",
+                    self.udp_stream.as_ref().unwrap().as_raw_fd(),
+                    stat
+                );
+            }
+            _ => {}
+        }
         self.stats.push(stat);
         // let sum: u64 = self.stats.iter().rev().take(2).map(|s| s.bytes).sum();
     }
     #[inline]
     pub fn read(&mut self) -> io::Result<usize> {
         let mut buf = [0; 128 * 1024];
-        match self.stream.read(&mut buf) {
+        let result = match self.conn {
+            Conn::UDP => self.udp_stream.as_ref().unwrap().recv(&mut buf),
+            Conn::TCP => self.stream.as_ref().unwrap().read(&mut buf),
+            _ => Ok(0),
+        };
+        match result {
             Ok(0) => {
                 return Ok(0);
             }
@@ -130,8 +182,63 @@ impl PerfStream {
             }
         }
     }
-    pub fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        match self.stream.write(buf) {
+    pub fn write(&mut self) -> io::Result<usize> {
+        let _buf: Vec<u8> = vec![1; 128 * 1024];
+        let result = match self.conn {
+            Conn::UDP => self.udp_stream.as_ref().unwrap().send(&_buf[0..63 * 1024]),
+            Conn::TCP => self.stream.as_ref().unwrap().write(_buf.as_slice()),
+            _ => Ok(0),
+        };
+        match result {
+            Ok(n) => {
+                return Ok(n);
+            }
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                return Err(Error::last_os_error());
+            }
+            Err(e) => {
+                return Err(e.into());
+            }
+        }
+    }
+    pub fn write_buf(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let result = match self.conn {
+            Conn::UDP => self.udp_stream.as_ref().unwrap().send(buf),
+            Conn::TCP => self.stream.as_ref().unwrap().write(buf),
+            _ => Ok(0),
+        };
+        match result {
+            Ok(n) => {
+                return Ok(n);
+            }
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                return Err(Error::last_os_error());
+            }
+            Err(e) => {
+                return Err(e.into());
+            }
+        }
+    }
+    #[inline]
+    pub fn _recv(&mut self) -> io::Result<usize> {
+        let mut buf = [0; 128 * 1024];
+        match self.udp_stream.as_ref().unwrap().recv(&mut buf) {
+            Ok(0) => {
+                return Ok(0);
+            }
+            Ok(n) => {
+                return Ok(n);
+            }
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                return Err(Error::last_os_error());
+            }
+            Err(e) => {
+                return Err(e);
+            }
+        }
+    }
+    pub fn _send(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self.udp_stream.as_ref().unwrap().send(buf) {
             Ok(n) => {
                 return Ok(n);
             }
@@ -150,7 +257,6 @@ pub enum Conn {
     TCP,
     UDP,
     QUIC,
-
 }
 #[derive(Serialize, Deserialize, Debug)]
 struct Settings {
@@ -204,7 +310,7 @@ impl Test {
     }
     pub fn transition(&mut self, state: TestState) {
         if self.debug() {
-            println!("Transition from {:?} to {:?}", self.state, state);
+            println!("Debug: Transition from {:?} to {:?}", self.state, state);
         }
         self.state = state;
     }
@@ -257,7 +363,7 @@ impl Test {
     pub fn udp(&self) -> bool {
         match self.settings.conn {
             Conn::UDP => true,
-            _ => false
+            _ => false,
         }
     }
     pub fn set_idle_timeout(&mut self, idle_timeout: u32) {
@@ -281,14 +387,7 @@ impl Test {
     pub fn print_stats(&self) {
         println!("- - - - - - - - - - - - - - - - - - - - - - - - - - - -");
         for pstream in &self.streams {
-            println!(
-                "[{:>3}] {:>3}s {} {} bytes {} blocks",
-                pstream.stream.as_raw_fd(),
-                Instant::now().sub(pstream.start).as_secs(),
-                Test::kmg(pstream.bytes, pstream.start, Instant::now()),
-                pstream.bytes,
-                pstream.blks
-            );
+            println!("{}", pstream);
         }
         if self.streams.len() > 1 {
             let bytes: u64 = self.streams.iter().map(|s| s.bytes).sum();

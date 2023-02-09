@@ -1,10 +1,10 @@
 use chrono::Local;
-use mio::net::TcpStream;
-use socket2::SockRef;
+use mio::net::{TcpStream, UdpSocket};
+use socket2::{Domain, Protocol, SockAddr, SockRef, Socket, Type};
 
 use crate::test::TestState;
 use std::{
-    io::{self, Error, Read, Write},
+    io::{self, Read, Write},
     os::unix::prelude::AsRawFd,
 };
 
@@ -114,4 +114,12 @@ pub fn print_stream(stream: &TcpStream) {
         stream.local_addr().unwrap(),
         stream.peer_addr().unwrap()
     );
+}
+
+pub fn create_udp_socket(addr: SockAddr) -> UdpSocket {
+    let sck = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP)).unwrap();
+    sck.set_reuse_address(true).unwrap();
+    sck.bind(&addr).unwrap();
+    let std_udp = std::net::UdpSocket::from(sck);
+    UdpSocket::from_std(std_udp)
 }
