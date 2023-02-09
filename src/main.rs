@@ -11,6 +11,7 @@ mod client;
 mod net;
 mod params;
 mod server;
+mod stream;
 mod test;
 
 #[tokio::main]

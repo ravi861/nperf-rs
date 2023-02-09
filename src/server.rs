@@ -86,9 +86,6 @@ impl ServerImpl {
                             }
                         }
                         TestState::CreateStreams => {
-                            if test.udp() {
-                                continue;
-                            }
                             // Collect all streams and get ready for running
                             let (mut stream, _) = self.listener.accept().unwrap();
                             print_stream(&stream);
@@ -319,7 +316,7 @@ impl ServerImpl {
             )
             .unwrap();
         test.streams
-            .push(PerfStream::new_udp(self.udp_listener.take().unwrap()));
+            .push(PerfStream::new(self.udp_listener.take().unwrap()));
         Ok(())
     }
 }
