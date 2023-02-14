@@ -1,9 +1,9 @@
 use crate::params::PerfParams;
-use crate::test::{PerfStream, Test, TestState};
+use crate::quic::{self, Quic};
+use crate::test::{Conn, PerfStream, Test, TestState};
 use mio::net::{TcpListener, TcpStream, UdpSocket};
 use mio::{Events, Interest, Poll, Token, Waker};
 use std::net::SocketAddr;
-use std::os::unix::prelude::AsRawFd;
 use std::time::Instant;
 
 use core::panic;
@@ -15,10 +15,12 @@ pub struct ServerImpl {
     listener: TcpListener,
     ctrl: Option<TcpStream>,
     udp_listener: Option<UdpSocket>,
+    quic: Option<Quic>,
 }
-const TCP_LISTENER: Token = Token(1024);
-const CONTROL: Token = Token(1025);
+const CONTROL: Token = Token(1024);
+const TCP_LISTENER: Token = Token(1025);
 const UDP_LISTENER: Token = Token(1026);
+const QUIC_LISTENER: Token = Token(1027);
 const TOKEN_START: usize = 0;
 
 impl ServerImpl {
@@ -37,6 +39,7 @@ impl ServerImpl {
             listener: listener,
             ctrl: None,
             udp_listener: None,
+            quic: None,
         })
     }
     pub async fn run(&mut self, test: &mut Test) -> std::io::Result<i8> {
@@ -60,6 +63,7 @@ impl ServerImpl {
                 test.print_stats();
                 return Ok(2);
             }
+            // println!("{:?}", events);
             for event in events.iter() {
                 match event.token() {
                     TCP_LISTENER => match test.state() {
@@ -88,7 +92,13 @@ impl ServerImpl {
                         TestState::CreateStreams => {
                             // Collect all streams and get ready for running
                             let (mut stream, _) = self.listener.accept().unwrap();
-                            print_stream(&stream);
+                            if test.sndbuf() > 0 {
+                                set_send_buffer_size(&stream, test.sndbuf() as usize);
+                            }
+                            if test.rcvbuf() > 0 {
+                                set_recv_buffer_size(&stream, test.rcvbuf() as usize);
+                            }
+                            print_tcp_stream(&stream);
                             let token = Token(TOKEN_START + test.tokens.len());
                             test.tokens.push(token);
                             poll.registry()
@@ -107,7 +117,7 @@ impl ServerImpl {
                                 );
                             }
                         }
-                        TestState::TestStart | TestState::TestRunning => {}
+                        TestState::TestRunning => {}
                         TestState::TestEnd => {
                             test.print_stats();
                             return Ok(0);
@@ -140,19 +150,38 @@ impl ServerImpl {
                                     println!("\tCookie: {}", test.cookie);
                                     println!("\tTCP MSS: {}", test.mss());
                                 }
-                                if test.udp() {
-                                    self.udp_listener = Some(create_udp_socket(self.addr.into()));
-                                    poll.registry().register(
-                                        self.udp_listener.as_mut().unwrap(),
-                                        UDP_LISTENER,
-                                        Interest::READABLE | Interest::WRITABLE,
-                                    )?;
+                                match test.conn() {
+                                    Conn::UDP => {
+                                        self.udp_listener =
+                                            Some(create_mio_udp_socket(self.addr.into()));
+                                        poll.registry().register(
+                                            self.udp_listener.as_mut().unwrap(),
+                                            UDP_LISTENER,
+                                            Interest::READABLE | Interest::WRITABLE,
+                                        )?;
+                                    }
+                                    Conn::QUIC => {
+                                        self.quic = Some(quic::server(self.addr.into()));
+                                        poll.registry().register(
+                                            self.quic.as_mut().unwrap(),
+                                            QUIC_LISTENER,
+                                            Interest::READABLE | Interest::WRITABLE,
+                                        )?;
+                                    }
+                                    _ => {}
                                 }
                                 test.transition(TestState::CreateStreams);
                                 send_state(ctrl_ref, TestState::CreateStreams);
                             }
                         }
-                        TestState::TestStart | TestState::TestRunning => {
+                        TestState::TestStart => {
+                            let ctrl_ref = self.ctrl.as_ref().unwrap();
+                            let buf = read_socket(ctrl_ref).await?;
+                            let state = TestState::from_i8(buf.as_bytes()[0] as i8);
+                            test.transition(state);
+                            waker.wake()?;
+                        }
+                        TestState::TestRunning => {
                             let ctrl_ref = self.ctrl.as_ref().unwrap();
                             let buf = read_socket(ctrl_ref).await?;
                             let state = TestState::from_i8(buf.as_bytes()[0] as i8);
@@ -176,7 +205,8 @@ impl ServerImpl {
                                 self.create_udp_stream(&mut poll, test).unwrap();
 
                                 if test.streams.len() < test.num_streams() as usize {
-                                    self.udp_listener = Some(create_udp_socket(self.addr.into()));
+                                    self.udp_listener =
+                                        Some(create_mio_udp_socket(self.addr.into()));
                                     poll.registry()
                                         .register(
                                             self.udp_listener.as_mut().unwrap(),
@@ -201,13 +231,51 @@ impl ServerImpl {
                         }
                         _ => {}
                     },
+                    QUIC_LISTENER => match test.state() {
+                        TestState::CreateStreams => {
+                            if event.is_readable() {
+                                self.create_quic_stream(&mut poll, test).await.unwrap();
+
+                                if test.streams.len() < test.num_streams() as usize {
+                                    self.quic = Some(quic::server(self.addr.into()));
+                                    poll.registry()
+                                        .register(
+                                            self.quic.as_mut().unwrap(),
+                                            QUIC_LISTENER,
+                                            Interest::READABLE | Interest::WRITABLE,
+                                        )
+                                        .unwrap();
+                                }
+                                if test.streams.len() > test.num_streams() as usize {
+                                    panic!("Incorrect parallel streams");
+                                }
+                                if test.streams.len() == test.num_streams() as usize {
+                                    let ctrl_ref = self.ctrl.as_ref().unwrap();
+                                    test.transition(TestState::TestStart);
+                                    send_state(ctrl_ref, TestState::TestStart);
+                                    println!(
+                                        "Starting Test: protocol: QUIC, {} streams",
+                                        test.num_streams()
+                                    );
+                                }
+                                break;
+                            }
+                        }
+                        _ => {}
+                    },
                     token => match test.state() {
                         TestState::TestRunning => {
                             if event.is_readable() {
-                                let udp = test.udp();
+                                let conn = test.conn();
                                 let pstream = &mut test.streams[token.0];
                                 loop {
-                                    match pstream.read() {
+                                    let d = match conn {
+                                        Conn::QUIC => {
+                                            quic::read((&mut pstream.stream).into()).await
+                                        }
+                                        _ => pstream.read(),
+                                    };
+                                    match d {
                                         Ok(0) => break,
                                         Ok(n) => {
                                             pstream.bytes += n as u64;
@@ -215,11 +283,11 @@ impl ServerImpl {
                                             pstream.blks += 1;
                                             pstream.curr_blks += 1;
                                         }
-                                        Err(ref e)
-                                            if e.kind() == std::io::ErrorKind::WouldBlock =>
-                                        {
-                                            break
-                                        }
+                                        // Err(ref e)
+                                        //     if e.kind() == std::io::ErrorKind::WouldBlock =>
+                                        // {
+                                        //     break
+                                        // }
                                         Err(_e) => break,
                                     }
                                     if pstream.curr_time.elapsed().as_millis() > 999 {
@@ -231,23 +299,41 @@ impl ServerImpl {
                                     }
                                     // tcp stream is edge-triggered. So keep looping until EGAIN
                                     // udp is best effort
-                                    if udp {
-                                        break;
+                                    match conn {
+                                        Conn::UDP => break,
+                                        _ => {}
                                     }
                                 }
                             }
                         }
                         TestState::CreateStreams | TestState::TestStart => {
                             if event.is_readable() {
-                                let pstream = &mut test.streams[token.0];
-                                let _buf = pstream.read()?;
-                                pstream.curr_time = Instant::now();
-                                // println!("Cookie: {}", buf);
-                                // keep this here for most recent start time of actual data
-                                test.start = Instant::now();
+                                match test.conn() {
+                                    Conn::QUIC => {
+                                        let pstream = &mut test.streams[token.0];
+                                        let q: &mut Quic = (&mut pstream.stream).into();
+                                        let recv =
+                                            q.conn.as_ref().unwrap().accept_uni().await.unwrap();
+                                        println!("Quic Accept UNI: {:?}", recv.id());
+                                        q.recv_streams = Vec::from([recv]);
+                                        // Because it is a unidirectional stream, we can only receive not send back.
+                                        let _n = quic::read(q).await.unwrap();
+                                        // println!("Cookie: {:?}", n);
+                                        pstream.curr_time = Instant::now();
+                                        test.start = Instant::now();
+                                    }
+                                    _ => {
+                                        let pstream = &mut test.streams[token.0];
+                                        let _n = pstream.read()?;
+                                        // println!("Cookie: {}", n);
+                                        // keep this here for most recent start time of actual data
+                                        pstream.curr_time = Instant::now();
+                                        test.start = Instant::now();
+                                    }
+                                }
                             }
                         }
-                        TestState::TestEnd => {}
+                        // TestState::TestEnd => {}
                         _ => {
                             println!(
                                 "Unexpected state {:?} for STREAM ({:?})",
@@ -260,30 +346,8 @@ impl ServerImpl {
                 }
             }
         }
-        // println!("Server timeout, exiting!");
-        //Ok(())
     }
-    fn _process_one_block(pstream: &mut PerfStream) -> Result<(), ()> {
-        match pstream.read() {
-            Ok(0) => {}
-            Ok(n) => {
-                pstream.bytes += n as u64;
-                pstream.curr_bytes += n as u64;
-                pstream.blks += 1;
-                pstream.curr_blks += 1;
-            }
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => return Err(()),
-            Err(_e) => return Err(()),
-        }
-        if pstream.curr_time.elapsed().as_millis() > 999 {
-            pstream.push_stat();
-            pstream.curr_time = Instant::now();
-            pstream.curr_bytes = 0;
-            pstream.curr_blks = 0;
-            pstream.curr_iter += 1;
-        }
-        Ok(())
-    }
+
     fn create_udp_stream(&mut self, poll: &mut Poll, test: &mut Test) -> Result<(), ()> {
         let mut buf = [0; 128 * 1024];
         let (_, sock_addr) = self
@@ -297,14 +361,11 @@ impl ServerImpl {
             .unwrap()
             .connect(sock_addr)
             .unwrap();
+
         let token = Token(TOKEN_START + test.tokens.len());
         test.tokens.push(token);
-        println!(
-            "[{:>3}] {} {}",
-            self.udp_listener.as_ref().unwrap().as_raw_fd(),
-            self.udp_listener.as_ref().unwrap().local_addr().unwrap(),
-            self.udp_listener.as_ref().unwrap().peer_addr().unwrap()
-        );
+        print_udp_stream(self.udp_listener.as_ref().unwrap());
+
         poll.registry()
             .deregister(self.udp_listener.as_mut().unwrap())
             .unwrap();
@@ -317,6 +378,26 @@ impl ServerImpl {
             .unwrap();
         test.streams
             .push(PerfStream::new(self.udp_listener.take().unwrap()));
+        Ok(())
+    }
+
+    async fn create_quic_stream(&mut self, poll: &mut Poll, test: &mut Test) -> Result<(), ()> {
+        let handshake = self.quic.as_ref().unwrap().endpoint.accept().await.unwrap();
+        let conn = handshake.await.unwrap();
+        self.quic.as_mut().unwrap().conn = Some(conn);
+
+        let token = Token(TOKEN_START + test.tokens.len());
+        test.tokens.push(token);
+        print_quic_stream(&self.quic.as_ref().unwrap());
+
+        poll.registry()
+            .deregister(self.quic.as_mut().unwrap())
+            .unwrap();
+        poll.registry()
+            .register(self.quic.as_mut().unwrap(), token, Interest::READABLE)
+            .unwrap();
+        test.streams
+            .push(PerfStream::new(self.quic.take().unwrap()));
         Ok(())
     }
 }

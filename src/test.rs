@@ -62,7 +62,7 @@ impl Display for Statistics {
     }
 }
 pub struct PerfStream {
-    pub gstream: Box<dyn Stream>,
+    pub stream: Box<dyn Stream>,
     pub created: Instant,
     pub start: Instant,
     pub bytes: u64,
@@ -79,7 +79,7 @@ impl Display for PerfStream {
         write!(
             f,
             "[{:>3}] {:>3}s {} {} bytes {} blocks",
-            self.gstream.fd(),
+            self.stream.fd(),
             Instant::now().sub(self.start).as_secs(),
             Test::kmg(self.bytes, self.start, Instant::now()),
             self.bytes,
@@ -91,7 +91,7 @@ impl Display for PerfStream {
 impl PerfStream {
     pub fn new<T: Stream + 'static>(stream: T) -> PerfStream {
         PerfStream {
-            gstream: Box::from(stream),
+            stream: Box::from(stream),
             created: Instant::now(),
             start: Instant::now(),
             bytes: 0,
@@ -111,14 +111,14 @@ impl PerfStream {
             bytes: self.curr_bytes,
             blks: self.curr_blks,
         };
-        println!("[{:>3}] {}", self.gstream.fd(), stat);
+        println!("[{:>3}] {}", self.stream.fd(), stat);
         self.stats.push(stat);
         // let sum: u64 = self.stats.iter().rev().take(2).map(|s| s.bytes).sum();
     }
     #[inline]
     pub fn read(&mut self) -> io::Result<usize> {
         let mut buf = [0; 128 * 1024];
-        match self.gstream.read(&mut buf) {
+        match self.stream.read(&mut buf) {
             Ok(0) => {
                 return Ok(0);
             }
@@ -134,7 +134,7 @@ impl PerfStream {
         }
     }
     pub fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        match self.gstream.write(buf) {
+        match self.stream.write(buf) {
             Ok(n) => {
                 return Ok(n);
             }
@@ -170,6 +170,8 @@ struct Settings {
     num_streams: u8,
     recv_timeout_in_secs: u32,
     mss: u32,
+    sndbuf: usize,
+    rcvbuf: usize,
 }
 
 pub struct Test {
@@ -194,6 +196,8 @@ impl Test {
             num_streams,
             recv_timeout_in_secs: DEFAULT_SESSION_TIMEOUT,
             mss: 0,
+            sndbuf: 0,
+            rcvbuf: 0,
         };
         Test {
             state,
@@ -236,6 +240,18 @@ impl Test {
     pub fn mss(&self) -> u32 {
         return self.settings.mss;
     }
+    pub fn set_sndbuf(&mut self, sndbuf: u32) {
+        self.settings.sndbuf = sndbuf as usize;
+    }
+    pub fn sndbuf(&self) -> u32 {
+        return self.settings.sndbuf as u32;
+    }
+    pub fn set_rcvbuf(&mut self, rcvbuf: u32) {
+        self.settings.rcvbuf = rcvbuf as usize;
+    }
+    pub fn rcvbuf(&self) -> u32 {
+        return self.settings.rcvbuf as u32;
+    }
     pub fn set_verbose(&mut self, verbose: bool) {
         self.verbose = verbose;
     }
@@ -257,20 +273,16 @@ impl Test {
     }
     */
     pub fn set_settings(&mut self, settings: String) {
-        let deserialized: Settings = serde_json::from_str(&settings).unwrap();
-        self.settings = deserialized;
+        self.settings = serde_json::from_str(&settings).unwrap();
     }
     pub fn settings(&self) -> String {
         return serde_json::to_string(&self.settings).unwrap();
     }
+    pub fn set_quic(&mut self) {
+        self.settings.conn = Conn::QUIC;
+    }
     pub fn set_udp(&mut self) {
         self.settings.conn = Conn::UDP;
-    }
-    pub fn udp(&self) -> bool {
-        match self.settings.conn {
-            Conn::UDP => true,
-            _ => false,
-        }
     }
     pub fn conn(&self) -> Conn {
         self.settings.conn

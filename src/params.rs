@@ -23,6 +23,7 @@ impl Display for PerfMode {
 pub struct PerfParams {
     pub mode: PerfMode,
     pub udp: bool,
+    pub quic: bool,
     pub verbose: bool,
     pub debug: bool,
     pub bindaddr: String,
@@ -32,6 +33,8 @@ pub struct PerfParams {
     pub idle_timeout: u32,
     pub num_streams: u8,
     pub mss: u32,
+    pub sendbuf: u32,
+    pub recvbuf: u32,
 }
 
 pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
@@ -39,6 +42,7 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
     let mut client = false;
     let mut port: u16 = 8080;
     let mut udp: bool = false;
+    let mut quic: bool = false;
     let mut dev: String = String::new();
     let mut bindaddr: String = String::from("127.0.0.1");
     let mut recv_timeout: u32 = DEFAULT_SESSION_TIMEOUT;
@@ -47,6 +51,8 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
     let mut verbose = false;
     let mut debug = false;
     let mut mss: u32 = 0;
+    let mut sendbuf: u32 = 0;
+    let mut recvbuf: u32 = 0;
     {
         let mut args = ArgumentParser::new();
         args.set_description("Greet somebody.");
@@ -62,6 +68,8 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
         );
         args.refer(&mut udp)
             .add_option(&["-u", "--udp"], StoreTrue, "[c] Use UDP");
+        args.refer(&mut quic)
+            .add_option(&["-q", "--quic"], StoreTrue, "[c] Use QUIC");
         args.refer(&mut port)
             .add_option(&["-p", "--port"], Store, "[s] Port server listen on");
         args.refer(&mut bindaddr).add_option(
@@ -86,6 +94,21 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
             Store,
             "[c] number of parallel client streams to run",
         );
+        args.refer(&mut mss).add_option(
+            &["-M", "--set-mss"],
+            Store,
+            "[c] set TCP maximum segment size",
+        );
+        args.refer(&mut sendbuf).add_option(
+            &["--send-buf-size"],
+            Store,
+            "[c] set socket send buffer size [default: OS defined]",
+        );
+        args.refer(&mut recvbuf).add_option(
+            &["--recv-buf-size"],
+            Store,
+            "[c] set socket receive buffer size [default: OS defined]",
+        );
         args.refer(&mut verbose).add_option(
             &["-V", "--verbose"],
             StoreTrue,
@@ -95,11 +118,6 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
             &["-d", "--debug"],
             StoreTrue,
             "[sc] Enable debug logging",
-        );
-        args.refer(&mut mss).add_option(
-            &["-M", "--set-mss"],
-            Store,
-            "[c] set TCP maximum segment size",
         );
         args.parse_args_or_exit();
     }
@@ -116,6 +134,7 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
     let params = PerfParams {
         mode,
         udp,
+        quic,
         verbose,
         debug,
         bindaddr,
@@ -125,6 +144,8 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
         idle_timeout,
         num_streams,
         mss,
+        sendbuf,
+        recvbuf,
     };
     Ok(params)
 }

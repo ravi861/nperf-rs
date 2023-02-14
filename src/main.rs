@@ -9,7 +9,9 @@ use std::io;
 use std::process::exit;
 mod client;
 mod net;
+mod noprotection;
 mod params;
+mod quic;
 mod server;
 mod stream;
 mod test;
@@ -23,8 +25,13 @@ async fn main() -> io::Result<()> {
     test.set_verbose(param.verbose);
     test.set_debug(param.debug);
     test.set_mss(param.mss);
+    test.set_sndbuf(param.sendbuf);
+    test.set_rcvbuf(param.recvbuf);
     if param.udp {
         test.set_udp();
+    }
+    if param.quic {
+        test.set_quic();
     }
 
     match param.mode {
