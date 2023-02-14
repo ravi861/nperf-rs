@@ -1,9 +1,9 @@
 use std::any::Any;
 use std::io::{self, Error};
 use std::net::{SocketAddr, UdpSocket};
+use std::os::unix::prelude::IntoRawFd;
 use std::os::unix::prelude::{AsRawFd, FromRawFd, RawFd};
 use std::sync::Arc;
-use std::{os::unix::prelude::IntoRawFd};
 
 use crate::net::*;
 use crate::noprotection::{NoProtectionClientConfig, NoProtectionServerConfig};
@@ -147,12 +147,7 @@ pub fn server(addr: SocketAddr) -> Quic {
     };
     server_config.transport_config(Arc::new(transport));
 
-    let socket = create_mio_udp_socket(addr);
-    // poll.registry()
-    //     .register(&mut socket, token, Interest::READABLE | Interest::WRITABLE)
-    //     .unwrap();
-
-    let socket: UdpSocket = unsafe { std::net::UdpSocket::from_raw_fd(socket.into_raw_fd()) };
+    let socket = create_net_udp_socket(addr);
     let fd = socket.as_raw_fd();
     let endpoint = quinn::Endpoint::new(
         Default::default(),

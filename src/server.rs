@@ -14,8 +14,8 @@ pub struct ServerImpl {
     addr: SocketAddr,
     listener: TcpListener,
     ctrl: Option<TcpStream>,
-    udp_listener: Option<UdpSocket>,
-    quic: Option<Quic>,
+    u: Option<UdpSocket>,
+    q: Option<Quic>,
 }
 const CONTROL: Token = Token(1024);
 const TCP_LISTENER: Token = Token(1025);
@@ -38,8 +38,8 @@ impl ServerImpl {
             addr,
             listener: listener,
             ctrl: None,
-            udp_listener: None,
-            quic: None,
+            u: None,
+            q: None,
         })
     }
     pub async fn run(&mut self, test: &mut Test) -> std::io::Result<i8> {
@@ -152,18 +152,17 @@ impl ServerImpl {
                                 }
                                 match test.conn() {
                                     Conn::UDP => {
-                                        self.udp_listener =
-                                            Some(create_mio_udp_socket(self.addr.into()));
+                                        self.u = Some(create_mio_udp_socket(self.addr.into()));
                                         poll.registry().register(
-                                            self.udp_listener.as_mut().unwrap(),
+                                            self.u.as_mut().unwrap(),
                                             UDP_LISTENER,
                                             Interest::READABLE | Interest::WRITABLE,
                                         )?;
                                     }
                                     Conn::QUIC => {
-                                        self.quic = Some(quic::server(self.addr.into()));
+                                        self.q = Some(quic::server(self.addr.into()));
                                         poll.registry().register(
-                                            self.quic.as_mut().unwrap(),
+                                            self.q.as_mut().unwrap(),
                                             QUIC_LISTENER,
                                             Interest::READABLE | Interest::WRITABLE,
                                         )?;
@@ -205,11 +204,10 @@ impl ServerImpl {
                                 self.create_udp_stream(&mut poll, test).unwrap();
 
                                 if test.streams.len() < test.num_streams() as usize {
-                                    self.udp_listener =
-                                        Some(create_mio_udp_socket(self.addr.into()));
+                                    self.u = Some(create_mio_udp_socket(self.addr.into()));
                                     poll.registry()
                                         .register(
-                                            self.udp_listener.as_mut().unwrap(),
+                                            self.u.as_mut().unwrap(),
                                             UDP_LISTENER,
                                             Interest::READABLE | Interest::WRITABLE,
                                         )
@@ -237,10 +235,10 @@ impl ServerImpl {
                                 self.create_quic_stream(&mut poll, test).await.unwrap();
 
                                 if test.streams.len() < test.num_streams() as usize {
-                                    self.quic = Some(quic::server(self.addr.into()));
+                                    self.q = Some(quic::server(self.addr.into()));
                                     poll.registry()
                                         .register(
-                                            self.quic.as_mut().unwrap(),
+                                            self.q.as_mut().unwrap(),
                                             QUIC_LISTENER,
                                             Interest::READABLE | Interest::WRITABLE,
                                         )
@@ -350,54 +348,39 @@ impl ServerImpl {
 
     fn create_udp_stream(&mut self, poll: &mut Poll, test: &mut Test) -> Result<(), ()> {
         let mut buf = [0; 128 * 1024];
-        let (_, sock_addr) = self
-            .udp_listener
-            .as_ref()
-            .unwrap()
-            .recv_from(&mut buf)
-            .unwrap();
-        self.udp_listener
-            .as_ref()
-            .unwrap()
-            .connect(sock_addr)
-            .unwrap();
+        let (_, sock_addr) = self.u.as_ref().unwrap().recv_from(&mut buf).unwrap();
+        self.u.as_ref().unwrap().connect(sock_addr).unwrap();
 
         let token = Token(TOKEN_START + test.tokens.len());
         test.tokens.push(token);
-        print_udp_stream(self.udp_listener.as_ref().unwrap());
+        print_udp_stream(self.u.as_ref().unwrap());
 
         poll.registry()
-            .deregister(self.udp_listener.as_mut().unwrap())
+            .deregister(self.u.as_mut().unwrap())
             .unwrap();
         poll.registry()
-            .register(
-                self.udp_listener.as_mut().unwrap(),
-                token,
-                Interest::READABLE,
-            )
+            .register(self.u.as_mut().unwrap(), token, Interest::READABLE)
             .unwrap();
-        test.streams
-            .push(PerfStream::new(self.udp_listener.take().unwrap()));
+        test.streams.push(PerfStream::new(self.u.take().unwrap()));
         Ok(())
     }
 
     async fn create_quic_stream(&mut self, poll: &mut Poll, test: &mut Test) -> Result<(), ()> {
-        let handshake = self.quic.as_ref().unwrap().endpoint.accept().await.unwrap();
+        let handshake = self.q.as_ref().unwrap().endpoint.accept().await.unwrap();
         let conn = handshake.await.unwrap();
-        self.quic.as_mut().unwrap().conn = Some(conn);
+        self.q.as_mut().unwrap().conn = Some(conn);
 
         let token = Token(TOKEN_START + test.tokens.len());
         test.tokens.push(token);
-        print_quic_stream(&self.quic.as_ref().unwrap());
+        print_quic_stream(&self.q.as_ref().unwrap());
 
         poll.registry()
-            .deregister(self.quic.as_mut().unwrap())
+            .deregister(self.q.as_mut().unwrap())
             .unwrap();
         poll.registry()
-            .register(self.quic.as_mut().unwrap(), token, Interest::READABLE)
+            .register(self.q.as_mut().unwrap(), token, Interest::READABLE)
             .unwrap();
-        test.streams
-            .push(PerfStream::new(self.quic.take().unwrap()));
+        test.streams.push(PerfStream::new(self.q.take().unwrap()));
         Ok(())
     }
 }
