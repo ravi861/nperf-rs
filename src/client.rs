@@ -11,6 +11,8 @@ use std::{io, thread};
 
 use crate::net::*;
 
+const ONE_SEC: Duration = Duration::from_millis(1000);
+
 pub struct ClientImpl {
     server_addr: SocketAddr,
     ctrl: TcpStream,
@@ -78,7 +80,8 @@ impl ClientImpl {
                                         test.streams.push(PerfStream::new(stream));
                                     }
                                     Conn::QUIC => {
-                                        let quic = quic::client(self.server_addr).await;
+                                        let quic =
+                                            quic::client(self.server_addr, test.skip_tls()).await;
                                         print_quic_stream(&quic);
                                         test.streams.push(PerfStream::new(quic));
                                     }
@@ -98,9 +101,7 @@ impl ClientImpl {
                                         println!("Quic Open UNI: {:?}", stream.id());
                                         q.send_streams.push(stream);
                                         match quic::write(q, make_cookie().as_bytes()).await {
-                                            Ok(_) => {
-                                                println!("Sent Cookie");
-                                            }
+                                            Ok(_) => {}
                                             Err(_e) => {
                                                 println!("Failed to send cookie");
                                                 continue;
@@ -129,9 +130,9 @@ impl ClientImpl {
                                 test.conn(),
                                 test.num_streams()
                             );
+                            test.start = Instant::now();
                             test.transition(TestState::TestRunning);
                             send_state(&self.ctrl, TestState::TestRunning);
-                            test.start = Instant::now();
                         }
                         TestState::TestEnd => {
                             match test.conn() {
@@ -171,22 +172,29 @@ impl ClientImpl {
                     STREAM => match test.state() {
                         TestState::TestRunning => {
                             if event.is_writable() {
-                                let buf: Vec<u8> = vec![1; 128 * 1024];
                                 let mut try_later = false;
                                 let conn = test.conn();
+                                let mut bytes: u64 = 0;
+                                let mut blks: u64 = 0;
+                                let udp_buf = [1; 65500];
+                                let tcp_buf = [1; 131072];
                                 while try_later == false {
                                     for pstream in &mut test.streams {
                                         let d = match conn {
+                                            Conn::TCP => pstream.write(&tcp_buf.as_slice()),
+                                            Conn::UDP => pstream.write(&udp_buf.as_slice()),
                                             Conn::QUIC => {
+                                                let buf = [1; 63 * 1024];
                                                 let q: &mut Quic = (&mut pstream.stream).into();
                                                 quic::write(q, &buf.as_slice()).await
                                             }
-                                            _ => pstream.write(&buf.as_slice()),
                                         };
                                         match d {
                                             Ok(n) => {
                                                 pstream.bytes += n as u64;
+                                                bytes += n as u64;
                                                 pstream.blks += 1;
+                                                blks += 1;
                                                 pstream.curr_bytes += n as u64;
                                                 pstream.curr_blks += 1;
                                             }
@@ -196,7 +204,7 @@ impl ClientImpl {
                                                 break;
                                             }
                                         }
-                                        if pstream.curr_time.elapsed().as_millis() > 999 {
+                                        if pstream.curr_time.elapsed() > ONE_SEC {
                                             pstream.push_stat();
                                             pstream.curr_time = Instant::now();
                                             pstream.curr_bytes = 0;
@@ -209,7 +217,17 @@ impl ClientImpl {
                                         }
                                     }
                                 }
-                                if test.start.elapsed().as_millis() > 10000 {
+                                test.total_bytes += bytes;
+                                test.total_blks += blks;
+                                if (test.blks() != 0) && (test.blks() < test.total_blks)
+                                    || (test.bytes() != 0) && (test.bytes() < test.total_bytes)
+                                    || (test.start.elapsed() > test.time())
+                                {
+                                    for pstream in &mut test.streams {
+                                        if pstream.curr_bytes > 0 {
+                                            pstream.push_stat();
+                                        }
+                                    }
                                     test.transition(TestState::TestEnd);
                                     send_state(&self.ctrl, TestState::TestEnd);
                                     for pstream in &mut test.streams {

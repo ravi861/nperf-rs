@@ -1,8 +1,8 @@
 use std::any::Any;
+use std::fs::{self};
 use std::io::{self, Error};
 use std::net::{SocketAddr, UdpSocket};
-use std::os::unix::prelude::IntoRawFd;
-use std::os::unix::prelude::{AsRawFd, FromRawFd, RawFd};
+use std::os::unix::prelude::{AsRawFd, RawFd};
 use std::sync::Arc;
 
 use crate::net::*;
@@ -52,7 +52,7 @@ impl event::Source for Quic {
 }
 
 impl Stream for Quic {
-    fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+    fn read(&mut self) -> io::Result<usize> {
         //let recv = self.conn.as_ref().unwrap().accept_uni();
         //std::io::Read::read(self, buf)
         Ok(0)
@@ -100,23 +100,23 @@ impl<'a> From<&'a mut Box<dyn Stream>> for &'a mut Quic {
     }
 }
 
-pub fn server(addr: SocketAddr) -> Quic {
+pub fn server(addr: SocketAddr, skip_tls: bool) -> Quic {
     let (key, cert) = match ("cert.key", "cert.crt") {
-        /*
         (&ref key, &ref cert) => {
-            let key = fs::read(key).context("reading key").unwrap();
-            let cert = fs::read(cert).expect("reading cert");
+            let key = fs::read(key).unwrap();
+            let cert = fs::read(cert).unwrap();
 
             let mut certs = Vec::new();
-            for cert in rustls_pemfile::certs(&mut cert.as_ref())
-                .context("parsing cert")
-                .unwrap()
-            {
+            for cert in rustls_pemfile::certs(&mut cert.as_ref()).unwrap() {
                 certs.push(rustls::Certificate(cert));
             }
 
-            (rustls::PrivateKey(key), certs)
-        }*/
+            let mut keys = Vec::new();
+            for key in rustls_pemfile::pkcs8_private_keys(&mut key.as_ref()).unwrap() {
+                keys.push(key);
+            }
+            (rustls::PrivateKey(keys.remove(0)), certs)
+        }
         _ => {
             let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
             (
@@ -137,10 +137,9 @@ pub fn server(addr: SocketAddr) -> Quic {
     crypto.alpn_protocols = vec![b"perf".to_vec()];
 
     let mut transport = quinn::TransportConfig::default();
-    transport.initial_max_udp_payload_size(1200); //opt.initial_max_udp_payload_size);
+    transport.initial_max_udp_payload_size(8192); //opt.initial_max_udp_payload_size);
 
-    let mut server_config = if true {
-        //opt.no_protection {
+    let mut server_config = if skip_tls {
         quinn::ServerConfig::with_crypto(Arc::new(NoProtectionServerConfig::new(Arc::new(crypto))))
     } else {
         quinn::ServerConfig::with_crypto(Arc::new(crypto))
@@ -166,7 +165,7 @@ pub fn server(addr: SocketAddr) -> Quic {
     }
 }
 
-pub async fn client(addr: SocketAddr) -> Quic {
+pub async fn client(addr: SocketAddr, skip_tls: bool) -> Quic {
     let socket = UdpSocket::bind("127.0.0.1:0".parse::<SocketAddr>().unwrap()).unwrap();
     let fd = socket.as_raw_fd();
     let endpoint = quinn::Endpoint::new(Default::default(), None, socket, TokioRuntime).unwrap();
@@ -181,10 +180,10 @@ pub async fn client(addr: SocketAddr) -> Quic {
     crypto.alpn_protocols = vec![b"perf".to_vec()];
 
     let mut transport = quinn::TransportConfig::default();
-    transport.initial_max_udp_payload_size(1200); //opt.initial_max_udp_payload_size);
+    transport.initial_max_udp_payload_size(8192); //opt.initial_max_udp_payload_size);
+                                                  // println!("{:?}", transport);
 
-    let mut cfg = if true {
-        //} opt.no_protection {
+    let mut cfg = if skip_tls {
         quinn::ClientConfig::new(Arc::new(NoProtectionClientConfig::new(Arc::new(crypto))))
     } else {
         quinn::ClientConfig::new(Arc::new(crypto))
@@ -207,7 +206,7 @@ pub async fn client(addr: SocketAddr) -> Quic {
 }
 
 pub async fn read(q: &mut Quic) -> io::Result<usize> {
-    let mut buf = [0; 1200];
+    let mut buf = [0; 63 * 1024];
     let mut count = 0;
     for stream in &mut q.recv_streams {
         match stream.read(&mut buf).await {
@@ -223,7 +222,7 @@ pub async fn read(q: &mut Quic) -> io::Result<usize> {
 
 pub async fn write(q: &mut Quic, buf: &[u8]) -> io::Result<usize> {
     for stream in &mut q.send_streams {
-        match stream.write_all(buf).await {
+        match stream.write(buf).await {
             Ok(_) => {}
             Err(_e) => return Err(Error::last_os_error()),
         }

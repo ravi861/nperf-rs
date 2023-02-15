@@ -9,7 +9,7 @@ use std::{
 };
 
 pub trait Stream {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize>;
+    fn read(&mut self) -> io::Result<usize>;
     fn write(&mut self, buf: &[u8]) -> io::Result<usize>;
     fn fd(&self) -> RawFd;
     fn as_any(&self) -> &dyn Any;
@@ -19,9 +19,12 @@ pub trait Stream {
 }
 
 impl Stream for TcpStream {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        std::io::Read::read(self, buf)
+    #[inline(always)]
+    fn read(&mut self) -> io::Result<usize> {
+        let mut buf = [0; 131072];
+        std::io::Read::read(self, &mut buf)
     }
+    #[inline(always)]
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         std::io::Write::write(self, buf)
     }
@@ -45,15 +48,14 @@ impl Stream for TcpStream {
 }
 
 impl Stream for UdpSocket {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.recv(buf)
+    #[inline(always)]
+    fn read(&mut self) -> io::Result<usize> {
+        let mut buf = [0; 65500];
+        self.recv(&mut buf)
     }
+    #[inline(always)]
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        if buf.len() >= 65536 {
-            self.send(&buf[..63 * 1024])
-        } else {
-            self.send(buf)
-        }
+        self.send(buf)
     }
     fn fd(&self) -> RawFd {
         self.as_raw_fd()

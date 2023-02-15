@@ -165,6 +165,7 @@ pub fn print_quic_stream(stream: &Quic) {
 pub fn create_net_udp_socket(addr: SocketAddr) -> std::net::UdpSocket {
     let sck = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP)).unwrap();
     sck.set_reuse_address(true).unwrap();
+    //sck.set_recv_buffer_size(63*1024).unwrap();
     sck.bind(&addr.into()).unwrap();
     std::net::UdpSocket::from(sck)
 }

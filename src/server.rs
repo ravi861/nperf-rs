@@ -1,14 +1,22 @@
 use crate::params::PerfParams;
 use crate::quic::{self, Quic};
 use crate::test::{Conn, PerfStream, Test, TestState};
+//use chrono::Duration;
 use mio::net::{TcpListener, TcpStream, UdpSocket};
 use mio::{Events, Interest, Poll, Token, Waker};
 use std::net::SocketAddr;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use core::panic;
 
 use crate::net::*;
+
+const CONTROL: Token = Token(1024);
+const TCP_LISTENER: Token = Token(1025);
+const UDP_LISTENER: Token = Token(1026);
+const QUIC_LISTENER: Token = Token(1027);
+const TOKEN_START: usize = 0;
+const ONE_SEC: Duration = Duration::from_millis(1000);
 
 pub struct ServerImpl {
     addr: SocketAddr,
@@ -17,11 +25,6 @@ pub struct ServerImpl {
     u: Option<UdpSocket>,
     q: Option<Quic>,
 }
-const CONTROL: Token = Token(1024);
-const TCP_LISTENER: Token = Token(1025);
-const UDP_LISTENER: Token = Token(1026);
-const QUIC_LISTENER: Token = Token(1027);
-const TOKEN_START: usize = 0;
 
 impl ServerImpl {
     pub fn new(params: &PerfParams) -> std::io::Result<ServerImpl> {
@@ -49,7 +52,7 @@ impl ServerImpl {
             TCP_LISTENER,
             Interest::READABLE | Interest::WRITABLE,
         )?;
-        let waker = Waker::new(poll.registry(), TCP_LISTENER)?;
+        let waker = Waker::new(poll.registry(), CONTROL)?;
         let mut events = Events::with_capacity(128);
 
         loop {
@@ -92,17 +95,14 @@ impl ServerImpl {
                         TestState::CreateStreams => {
                             // Collect all streams and get ready for running
                             let (mut stream, _) = self.listener.accept().unwrap();
-                            if test.sndbuf() > 0 {
-                                set_send_buffer_size(&stream, test.sndbuf() as usize);
-                            }
-                            if test.rcvbuf() > 0 {
-                                set_recv_buffer_size(&stream, test.rcvbuf() as usize);
-                            }
                             print_tcp_stream(&stream);
                             let token = Token(TOKEN_START + test.tokens.len());
                             test.tokens.push(token);
-                            poll.registry()
-                                .register(&mut stream, token, Interest::READABLE)?;
+                            poll.registry().register(
+                                &mut stream,
+                                token,
+                                Interest::READABLE | Interest::WRITABLE,
+                            )?;
                             test.streams.push(PerfStream::new(stream));
                             if test.streams.len() > test.num_streams() as usize {
                                 panic!("Incorrect parallel streams");
@@ -116,11 +116,6 @@ impl ServerImpl {
                                     test.num_streams()
                                 );
                             }
-                        }
-                        TestState::TestRunning => {}
-                        TestState::TestEnd => {
-                            test.print_stats();
-                            return Ok(0);
                         }
                         _ => {
                             println!(
@@ -160,7 +155,8 @@ impl ServerImpl {
                                         )?;
                                     }
                                     Conn::QUIC => {
-                                        self.q = Some(quic::server(self.addr.into()));
+                                        self.q =
+                                            Some(quic::server(self.addr.into(), test.skip_tls()));
                                         poll.registry().register(
                                             self.q.as_mut().unwrap(),
                                             QUIC_LISTENER,
@@ -178,7 +174,6 @@ impl ServerImpl {
                             let buf = read_socket(ctrl_ref).await?;
                             let state = TestState::from_i8(buf.as_bytes()[0] as i8);
                             test.transition(state);
-                            waker.wake()?;
                         }
                         TestState::TestRunning => {
                             let ctrl_ref = self.ctrl.as_ref().unwrap();
@@ -188,7 +183,15 @@ impl ServerImpl {
                             waker.wake()?;
                         }
                         TestState::CreateStreams => {}
-                        TestState::TestEnd => {}
+                        TestState::TestEnd => {
+                            for pstream in &mut test.streams {
+                                if pstream.curr_bytes > 0 {
+                                    pstream.push_stat();
+                                }
+                            }
+                            test.print_stats();
+                            return Ok(0);
+                        }
                         _ => {
                             println!(
                                 "Unexpected state {:?} for CONTROL ({:?})",
@@ -235,7 +238,7 @@ impl ServerImpl {
                                 self.create_quic_stream(&mut poll, test).await.unwrap();
 
                                 if test.streams.len() < test.num_streams() as usize {
-                                    self.q = Some(quic::server(self.addr.into()));
+                                    self.q = Some(quic::server(self.addr.into(), test.skip_tls()));
                                     poll.registry()
                                         .register(
                                             self.q.as_mut().unwrap(),
@@ -276,19 +279,15 @@ impl ServerImpl {
                                     match d {
                                         Ok(0) => break,
                                         Ok(n) => {
+                                            //println!("{} bytes", n);
                                             pstream.bytes += n as u64;
                                             pstream.curr_bytes += n as u64;
                                             pstream.blks += 1;
                                             pstream.curr_blks += 1;
                                         }
-                                        // Err(ref e)
-                                        //     if e.kind() == std::io::ErrorKind::WouldBlock =>
-                                        // {
-                                        //     break
-                                        // }
                                         Err(_e) => break,
                                     }
-                                    if pstream.curr_time.elapsed().as_millis() > 999 {
+                                    if pstream.curr_time.elapsed() > ONE_SEC {
                                         pstream.push_stat();
                                         pstream.curr_time = Instant::now();
                                         pstream.curr_bytes = 0;
@@ -331,7 +330,7 @@ impl ServerImpl {
                                 }
                             }
                         }
-                        // TestState::TestEnd => {}
+                        TestState::TestEnd => {}
                         _ => {
                             println!(
                                 "Unexpected state {:?} for STREAM ({:?})",

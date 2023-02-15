@@ -35,6 +35,11 @@ pub struct PerfParams {
     pub mss: u32,
     pub sendbuf: u32,
     pub recvbuf: u32,
+    pub skip_tls: bool,
+    pub time: u64,
+    pub bytes: u64,
+    pub blks: u64,
+    pub length: u32,
 }
 
 pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
@@ -48,11 +53,16 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
     let mut recv_timeout: u32 = DEFAULT_SESSION_TIMEOUT;
     let mut idle_timeout: u32 = 0;
     let mut num_streams: u8 = 1;
-    let mut verbose = false;
-    let mut debug = false;
     let mut mss: u32 = 0;
     let mut sendbuf: u32 = 0;
     let mut recvbuf: u32 = 0;
+    let mut skip_tls: bool = false;
+    let mut verbose = false;
+    let mut debug = false;
+    let mut time: u64 = 10;
+    let mut bytes: u64 = 0;
+    let mut blks: u64 = 0;
+    let mut length: u32 = 0;
     {
         let mut args = ArgumentParser::new();
         args.set_description("Greet somebody.");
@@ -84,6 +94,26 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
             Store,
             "[sc] idle timeout for receiving data (default 120s)",
         );
+        args.refer(&mut time).add_option(
+            &["-t", "--time"],
+            Store,
+            "[c] time in seconds to transmit for (default 10 secs)",
+        );
+        args.refer(&mut bytes).add_option(
+            &["-n", "--bytes"],
+            Store,
+            "[c] number of bytes to transmit (instead of -t)",
+        );
+        args.refer(&mut blks).add_option(
+            &["-k", "--blocks"],
+            Store,
+            "[c] number of blocks (packets) to transmit (instead of -t or -n)",
+        );
+        args.refer(&mut length).add_option(
+            &["-l", "--length"],
+            Store,
+            "[c] length of buffer to read or write (default 128 KB for TCP, dynamic or 1460 for UDP)",
+        );
         args.refer(&mut idle_timeout).add_option(
             &["--idle-timeout"],
             Store,
@@ -108,6 +138,11 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
             &["--recv-buf-size"],
             Store,
             "[c] set socket receive buffer size [default: OS defined]",
+        );
+        args.refer(&mut skip_tls).add_option(
+            &["--skip-tls"],
+            StoreTrue,
+            "[c] Disable QUIC connection encryption",
         );
         args.refer(&mut verbose).add_option(
             &["-V", "--verbose"],
@@ -146,6 +181,11 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
         mss,
         sendbuf,
         recvbuf,
+        skip_tls,
+        time,
+        bytes,
+        blks,
+        length,
     };
     Ok(params)
 }

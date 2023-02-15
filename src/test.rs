@@ -1,4 +1,4 @@
-use crate::stream::*;
+use crate::{params::PerfParams, stream::*};
 use mio::Token;
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -117,22 +117,25 @@ impl PerfStream {
     }
     #[inline]
     pub fn read(&mut self) -> io::Result<usize> {
-        let mut buf = [0; 128 * 1024];
-        match self.stream.read(&mut buf) {
+        match self.stream.read() {
             Ok(0) => {
+                // println!("Zero bytes read");
                 return Ok(0);
             }
             Ok(n) => {
                 return Ok(n);
             }
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                // println!("{:?}", e);
                 return Err(Error::last_os_error());
             }
             Err(e) => {
+                // println!("{:?}", e);
                 return Err(e);
             }
         }
     }
+    #[inline]
     pub fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         match self.stream.write(buf) {
             Ok(n) => {
@@ -172,12 +175,17 @@ struct Settings {
     mss: u32,
     sndbuf: usize,
     rcvbuf: usize,
+    time: Duration,
+    bytes: u64,
+    blks: u64,
+    length: u32,
 }
 
 pub struct Test {
     state: TestState,
     verbose: bool,
     debug: bool,
+    skip_tls: bool,
     pub cookie: String,
     settings: Settings,
     idle_timeout_in_secs: Option<Duration>,
@@ -185,6 +193,8 @@ pub struct Test {
     pub streams: Vec<PerfStream>,
     pub tokens: Vec<Token>,
     pub start: Instant,
+    pub total_bytes: u64,
+    pub total_blks: u64,
 }
 
 impl Test {
@@ -198,19 +208,48 @@ impl Test {
             mss: 0,
             sndbuf: 0,
             rcvbuf: 0,
+            time: Duration::from_secs(10),
+            bytes: 0,
+            blks: 0,
+            length: 0,
         };
         Test {
             state,
             settings,
             verbose: false,
             debug: false,
+            skip_tls: false,
             cookie: String::new(),
             idle_timeout_in_secs: None,
             reset_counter: 0,
             streams: Vec::new(),
             tokens: Vec::new(),
             start: Instant::now(),
+            total_bytes: 0,
+            total_blks: 0,
         }
+    }
+    pub fn from(param: &PerfParams) -> Test {
+        let mut test = Test::new();
+        test.settings.num_streams = param.num_streams;
+        test.set_idle_timeout(param.idle_timeout);
+        test.verbose = param.verbose;
+        test.debug = param.debug;
+        test.settings.mss = param.mss;
+        test.settings.sndbuf = param.sendbuf as usize;
+        test.settings.rcvbuf = param.recvbuf as usize;
+        test.skip_tls = param.skip_tls;
+        if param.udp {
+            test.settings.conn = Conn::UDP;
+        }
+        if param.quic {
+            test.settings.conn = Conn::QUIC;
+        }
+        test.settings.time = Duration::from_secs(param.time);
+        test.settings.bytes = param.bytes;
+        test.settings.blks = param.blks;
+        test.settings.length = param.length;
+        test
     }
     pub fn reset(&mut self) {
         self.state = TestState::Start;
@@ -228,46 +267,28 @@ impl Test {
     pub fn state(&self) -> TestState {
         self.state
     }
-    pub fn set_num_streams(&mut self, num_streams: u8) {
-        self.settings.num_streams = num_streams;
-    }
     pub fn num_streams(&self) -> u8 {
         return self.settings.num_streams;
-    }
-    pub fn set_mss(&mut self, mss: u32) {
-        self.settings.mss = mss;
     }
     pub fn mss(&self) -> u32 {
         return self.settings.mss;
     }
-    pub fn set_sndbuf(&mut self, sndbuf: u32) {
-        self.settings.sndbuf = sndbuf as usize;
-    }
     pub fn sndbuf(&self) -> u32 {
         return self.settings.sndbuf as u32;
-    }
-    pub fn set_rcvbuf(&mut self, rcvbuf: u32) {
-        self.settings.rcvbuf = rcvbuf as usize;
     }
     pub fn rcvbuf(&self) -> u32 {
         return self.settings.rcvbuf as u32;
     }
-    pub fn set_verbose(&mut self, verbose: bool) {
-        self.verbose = verbose;
-    }
     pub fn verbose(&self) -> bool {
         return self.verbose;
-    }
-    pub fn set_debug(&mut self, debug: bool) {
-        self.debug = debug;
     }
     pub fn debug(&self) -> bool {
         return self.debug;
     }
-    /*
-    pub fn set_recv_timeout(&mut self, recv_timeout: u32) {
-        self.settings.recv_timeout_in_secs = recv_timeout;
+    pub fn skip_tls(&self) -> bool {
+        return self.skip_tls;
     }
+    /*
     pub fn recv_timeout(&self) -> u32 {
         return self.settings.recv_timeout_in_secs;
     }
@@ -278,14 +299,24 @@ impl Test {
     pub fn settings(&self) -> String {
         return serde_json::to_string(&self.settings).unwrap();
     }
-    pub fn set_quic(&mut self) {
-        self.settings.conn = Conn::QUIC;
-    }
-    pub fn set_udp(&mut self) {
-        self.settings.conn = Conn::UDP;
-    }
+    #[inline(always)]
     pub fn conn(&self) -> Conn {
         self.settings.conn
+    }
+    #[inline(always)]
+    pub fn time(&self) -> Duration {
+        self.settings.time
+    }
+    #[inline(always)]
+    pub fn bytes(&self) -> u64 {
+        self.settings.bytes
+    }
+    #[inline(always)]
+    pub fn blks(&self) -> u64 {
+        self.settings.blks
+    }
+    pub fn length(&self) -> u32 {
+        self.settings.length
     }
     pub fn set_idle_timeout(&mut self, idle_timeout: u32) {
         if idle_timeout > 0 {
@@ -298,12 +329,6 @@ impl Test {
     pub fn reset_counter_inc(&mut self) -> u16 {
         self.reset_counter += 1;
         return self.reset_counter;
-    }
-    pub fn _collect_stats(&self) -> (u64, u64) {
-        (
-            self.streams.iter().map(|s| s.bytes).sum(),
-            self.streams.iter().map(|s| s.blks).sum(),
-        )
     }
     pub fn print_stats(&self) {
         println!("- - - - - - - - - - - - - - - - - - - - - - - - - - - -");
