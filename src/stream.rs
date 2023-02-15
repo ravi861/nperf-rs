@@ -50,7 +50,7 @@ impl Stream for TcpStream {
 impl Stream for UdpSocket {
     #[inline(always)]
     fn read(&mut self) -> io::Result<usize> {
-        let mut buf = [0; 65500];
+        let mut buf = [0; 65536];
         self.recv(&mut buf)
     }
     #[inline(always)]

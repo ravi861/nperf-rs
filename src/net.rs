@@ -96,7 +96,6 @@ pub fn set_nodelay<T: Stream + AsRawFd + 'static>(stream: &T) {
         }
     }
 }
-
 pub fn set_send_buffer_size<T: Stream + AsRawFd + 'static>(stream: &T, sz: usize) {
     let sck = SockRef::from(stream);
     match sck.set_send_buffer_size(sz) {
@@ -166,6 +165,7 @@ pub fn create_net_udp_socket(addr: SocketAddr) -> std::net::UdpSocket {
     let sck = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP)).unwrap();
     sck.set_reuse_address(true).unwrap();
     //sck.set_recv_buffer_size(63*1024).unwrap();
+    sck.set_nonblocking(true).unwrap();
     sck.bind(&addr.into()).unwrap();
     std::net::UdpSocket::from(sck)
 }

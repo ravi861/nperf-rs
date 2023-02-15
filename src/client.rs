@@ -1,11 +1,9 @@
 use crate::params::PerfParams;
 use crate::quic::{self, Quic};
 use crate::test::{Conn, PerfStream, Test, TestState};
-use mio::net::UdpSocket;
-use mio::{net::TcpStream, Events, Interest, Poll, Token, Waker};
-
+use mio::net::{TcpStream, UdpSocket};
+use mio::{Events, Interest, Poll, Token, Waker};
 use std::net::SocketAddr;
-use std::process::exit;
 use std::time::{Duration, Instant};
 use std::{io, thread};
 
@@ -13,13 +11,13 @@ use crate::net::*;
 
 const ONE_SEC: Duration = Duration::from_millis(1000);
 
+const CONTROL: Token = Token(1024);
+const STREAM: Token = Token(0);
+
 pub struct ClientImpl {
     server_addr: SocketAddr,
     ctrl: TcpStream,
 }
-
-const CONTROL: Token = Token(0);
-const STREAM: Token = Token(1);
 
 impl ClientImpl {
     pub fn new(params: &PerfParams) -> io::Result<ClientImpl> {
@@ -153,8 +151,13 @@ impl ClientImpl {
                                 _ => {}
                             }
                             self.ctrl.shutdown(std::net::Shutdown::Both)?;
+                            for pstream in &mut test.streams {
+                                if pstream.curr_bytes > 0 {
+                                    pstream.push_stat();
+                                }
+                            }
                             test.print_stats();
-                            exit(0);
+                            return Ok(());
                         }
                         TestState::Wait => {
                             if event.is_readable() {
@@ -184,7 +187,7 @@ impl ClientImpl {
                                             Conn::TCP => pstream.write(&tcp_buf.as_slice()),
                                             Conn::UDP => pstream.write(&udp_buf.as_slice()),
                                             Conn::QUIC => {
-                                                let buf = [1; 63 * 1024];
+                                                let buf = [1; 1460];
                                                 let q: &mut Quic = (&mut pstream.stream).into();
                                                 quic::write(q, &buf.as_slice()).await
                                             }
@@ -223,11 +226,6 @@ impl ClientImpl {
                                     || (test.bytes() != 0) && (test.bytes() < test.total_bytes)
                                     || (test.start.elapsed() > test.time())
                                 {
-                                    for pstream in &mut test.streams {
-                                        if pstream.curr_bytes > 0 {
-                                            pstream.push_stat();
-                                        }
-                                    }
                                     test.transition(TestState::TestEnd);
                                     send_state(&self.ctrl, TestState::TestEnd);
                                     for pstream in &mut test.streams {

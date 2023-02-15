@@ -1,7 +1,6 @@
 use crate::params::PerfParams;
 use crate::quic::{self, Quic};
 use crate::test::{Conn, PerfStream, Test, TestState};
-//use chrono::Duration;
 use mio::net::{TcpListener, TcpStream, UdpSocket};
 use mio::{Events, Interest, Poll, Token, Waker};
 use std::net::SocketAddr;
@@ -279,7 +278,7 @@ impl ServerImpl {
                                     match d {
                                         Ok(0) => break,
                                         Ok(n) => {
-                                            //println!("{} bytes", n);
+                                            // println!("{} bytes", n);
                                             pstream.bytes += n as u64;
                                             pstream.curr_bytes += n as u64;
                                             pstream.blks += 1;
@@ -293,12 +292,6 @@ impl ServerImpl {
                                         pstream.curr_bytes = 0;
                                         pstream.curr_blks = 0;
                                         pstream.curr_iter += 1;
-                                    }
-                                    // tcp stream is edge-triggered. So keep looping until EGAIN
-                                    // udp is best effort
-                                    match conn {
-                                        Conn::UDP => break,
-                                        _ => {}
                                     }
                                 }
                             }
@@ -352,14 +345,11 @@ impl ServerImpl {
 
         let token = Token(TOKEN_START + test.tokens.len());
         test.tokens.push(token);
-        print_udp_stream(self.u.as_ref().unwrap());
+        poll.registry()
+            .reregister(self.u.as_mut().unwrap(), token, Interest::READABLE)
+            .unwrap();
 
-        poll.registry()
-            .deregister(self.u.as_mut().unwrap())
-            .unwrap();
-        poll.registry()
-            .register(self.u.as_mut().unwrap(), token, Interest::READABLE)
-            .unwrap();
+        print_udp_stream(self.u.as_ref().unwrap());
         test.streams.push(PerfStream::new(self.u.take().unwrap()));
         Ok(())
     }
@@ -371,14 +361,11 @@ impl ServerImpl {
 
         let token = Token(TOKEN_START + test.tokens.len());
         test.tokens.push(token);
-        print_quic_stream(&self.q.as_ref().unwrap());
+        poll.registry()
+            .reregister(self.q.as_mut().unwrap(), token, Interest::READABLE)
+            .unwrap();
 
-        poll.registry()
-            .deregister(self.q.as_mut().unwrap())
-            .unwrap();
-        poll.registry()
-            .register(self.q.as_mut().unwrap(), token, Interest::READABLE)
-            .unwrap();
+        print_quic_stream(&self.q.as_ref().unwrap());
         test.streams.push(PerfStream::new(self.q.take().unwrap()));
         Ok(())
     }
