@@ -1,5 +1,6 @@
 use crate::params::PerfParams;
 use crate::quic::{self, Quic};
+use crate::stream::Stream;
 use crate::test::{Conn, PerfStream, Test, TestState};
 use mio::net::{TcpStream, UdpSocket};
 use mio::{Events, Interest, Poll, Token, Waker};
@@ -68,20 +69,20 @@ impl ClientImpl {
                                             UdpSocket::bind("127.0.0.1:0".parse().unwrap())
                                                 .unwrap();
                                         stream.connect(self.server_addr).unwrap();
-                                        print_udp_stream(&stream);
+                                        stream.print();
                                         stream.send("hello".as_bytes())?;
                                         test.streams.push(PerfStream::new(stream));
                                     }
                                     Conn::TCP => {
                                         let stream = TcpStream::connect(self.server_addr)?;
-                                        print_tcp_stream(&stream);
+                                        stream.print();
                                         test.streams.push(PerfStream::new(stream));
                                     }
                                     Conn::QUIC => {
-                                        let quic =
+                                        let stream =
                                             quic::client(self.server_addr, test.skip_tls()).await;
-                                        print_quic_stream(&quic);
-                                        test.streams.push(PerfStream::new(quic));
+                                        stream.print();
+                                        test.streams.push(PerfStream::new(stream));
                                     }
                                 }
                             }

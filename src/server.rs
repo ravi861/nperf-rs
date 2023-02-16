@@ -1,5 +1,6 @@
 use crate::params::PerfParams;
 use crate::quic::{self, Quic};
+use crate::stream::Stream;
 use crate::test::{Conn, PerfStream, Test, TestState};
 use mio::net::{TcpListener, TcpStream, UdpSocket};
 use mio::{Events, Interest, Poll, Token, Waker};
@@ -19,8 +20,8 @@ const ONE_SEC: Duration = Duration::from_millis(1000);
 
 pub struct ServerImpl {
     addr: SocketAddr,
-    listener: TcpListener,
     ctrl: Option<TcpStream>,
+    t: TcpListener,
     u: Option<UdpSocket>,
     q: Option<Quic>,
 }
@@ -38,8 +39,8 @@ impl ServerImpl {
         let listener = TcpListener::bind(addr)?;
         Ok(ServerImpl {
             addr,
-            listener: listener,
             ctrl: None,
+            t: listener,
             u: None,
             q: None,
         })
@@ -47,7 +48,7 @@ impl ServerImpl {
     pub async fn run(&mut self, test: &mut Test) -> std::io::Result<i8> {
         let mut poll = Poll::new().unwrap();
         poll.registry().register(
-            &mut self.listener,
+            &mut self.t,
             TCP_LISTENER,
             Interest::READABLE | Interest::WRITABLE,
         )?;
@@ -70,7 +71,7 @@ impl ServerImpl {
                 match event.token() {
                     TCP_LISTENER => match test.state() {
                         TestState::Start => {
-                            let (stream, addr) = self.listener.accept().unwrap();
+                            let (stream, addr) = self.t.accept().unwrap();
                             match self.ctrl {
                                 None => {
                                     if test.verbose() {
@@ -92,17 +93,8 @@ impl ServerImpl {
                             }
                         }
                         TestState::CreateStreams => {
-                            // Collect all streams and get ready for running
-                            let (mut stream, _) = self.listener.accept().unwrap();
-                            print_tcp_stream(&stream);
-                            let token = Token(TOKEN_START + test.tokens.len());
-                            test.tokens.push(token);
-                            poll.registry().register(
-                                &mut stream,
-                                token,
-                                Interest::READABLE | Interest::WRITABLE,
-                            )?;
-                            test.streams.push(PerfStream::new(stream));
+                            self.create_tcp_stream(&mut poll, test).unwrap();
+
                             if test.streams.len() > test.num_streams() as usize {
                                 panic!("Incorrect parallel streams");
                             }
@@ -350,6 +342,20 @@ impl ServerImpl {
         }
     }
 
+    fn create_tcp_stream(&mut self, poll: &mut Poll, test: &mut Test) -> Result<(), ()> {
+        let (mut stream, _) = self.t.accept().unwrap();
+
+        let token = Token(TOKEN_START + test.tokens.len());
+        test.tokens.push(token);
+        poll.registry()
+            .register(&mut stream, token, Interest::READABLE)
+            .unwrap();
+
+        stream.print();
+        test.streams.push(PerfStream::new(stream));
+        Ok(())
+    }
+
     fn create_udp_stream(&mut self, poll: &mut Poll, test: &mut Test) -> Result<(), ()> {
         let mut buf = [0; 128 * 1024];
         let (_, sock_addr) = self.u.as_ref().unwrap().recv_from(&mut buf).unwrap();
@@ -361,7 +367,7 @@ impl ServerImpl {
             .reregister(self.u.as_mut().unwrap(), token, Interest::READABLE)
             .unwrap();
 
-        print_udp_stream(self.u.as_ref().unwrap());
+        self.u.as_ref().unwrap().print();
         test.streams.push(PerfStream::new(self.u.take().unwrap()));
         Ok(())
     }
@@ -377,7 +383,7 @@ impl ServerImpl {
             .reregister(self.q.as_mut().unwrap(), token, Interest::READABLE)
             .unwrap();
 
-        print_quic_stream(&self.q.as_ref().unwrap());
+        self.q.as_ref().unwrap().print();
         test.streams.push(PerfStream::new(self.q.take().unwrap()));
         Ok(())
     }

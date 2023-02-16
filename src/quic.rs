@@ -82,6 +82,17 @@ impl Stream for Quic {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
+    fn print(&self) {
+        //let sck = SockRef::from(stream);
+        println!(
+            "[{:>3}] local {:?}, peer {}", // sndbuf {} rcvbuf {}",
+            self.fd,
+            self.conn.as_ref().unwrap().local_ip(),
+            self.conn.as_ref().unwrap().remote_address(),
+            // sck.send_buffer_size().unwrap(),
+            // sck.recv_buffer_size().unwrap()
+        );
+    }
 }
 
 impl<'a> From<&'a Box<dyn Stream>> for &'a Quic {

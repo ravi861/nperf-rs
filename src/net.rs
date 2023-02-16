@@ -2,7 +2,6 @@ use chrono::Local;
 use mio::net::{TcpStream, UdpSocket};
 use socket2::{Domain, Protocol, SockRef, Socket, Type};
 
-use crate::quic::Quic;
 use crate::{stream::Stream, test::TestState};
 use std::io::{self, Read, Write};
 use std::net::SocketAddr;
@@ -125,40 +124,6 @@ pub fn mss(stream: &TcpStream) -> u32 {
             return 0;
         }
     }
-}
-
-pub fn print_tcp_stream(stream: &TcpStream) {
-    let sck = SockRef::from(stream);
-    println!(
-        "[{:>3}] local {}, peer {} sndbuf {} rcvbuf {}",
-        stream.as_raw_fd(),
-        stream.local_addr().unwrap(),
-        stream.peer_addr().unwrap(),
-        sck.send_buffer_size().unwrap(),
-        sck.recv_buffer_size().unwrap()
-    );
-}
-pub fn print_udp_stream(stream: &UdpSocket) {
-    let sck = SockRef::from(stream);
-    println!(
-        "[{:>3}] local {}, peer {} sndbuf {} rcvbuf {}",
-        stream.as_raw_fd(),
-        stream.local_addr().unwrap(),
-        stream.peer_addr().unwrap(),
-        sck.send_buffer_size().unwrap(),
-        sck.recv_buffer_size().unwrap()
-    );
-}
-pub fn print_quic_stream(stream: &Quic) {
-    //let sck = SockRef::from(stream);
-    println!(
-        "[{:>3}] local {:?}, peer {}", // sndbuf {} rcvbuf {}",
-        stream.fd,
-        stream.conn.as_ref().unwrap().local_ip(),
-        stream.conn.as_ref().unwrap().remote_address(),
-        // sck.send_buffer_size().unwrap(),
-        // sck.recv_buffer_size().unwrap()
-    );
 }
 
 pub fn create_net_udp_socket(addr: SocketAddr) -> std::net::UdpSocket {
