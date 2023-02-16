@@ -173,6 +173,7 @@ struct Settings {
     num_streams: u8,
     recv_timeout_in_secs: u32,
     mss: u32,
+    bitrate: u64,
     sndbuf: usize,
     rcvbuf: usize,
     time: Duration,
@@ -206,6 +207,7 @@ impl Test {
             num_streams,
             recv_timeout_in_secs: DEFAULT_SESSION_TIMEOUT,
             mss: 0,
+            bitrate: 0,
             sndbuf: 0,
             rcvbuf: 0,
             time: Duration::from_secs(10),
@@ -236,6 +238,7 @@ impl Test {
         test.verbose = param.verbose;
         test.debug = param.debug;
         test.settings.mss = param.mss;
+        test.settings.bitrate = param.bitrate;
         test.settings.sndbuf = param.sendbuf as usize;
         test.settings.rcvbuf = param.recvbuf as usize;
         test.skip_tls = param.skip_tls;

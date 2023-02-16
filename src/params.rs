@@ -5,6 +5,40 @@ use argparse::{ArgumentParser, Store, StoreTrue};
 
 use crate::test::DEFAULT_SESSION_TIMEOUT;
 
+fn kmg_to_bits(rate: u64, kmg: char) -> u64 {
+    match kmg {
+        'k' | 'K' => rate * 1024,
+        'm' | 'M' => rate * 1024 * 1024,
+        'g' | 'G' => rate * 1024 * 1024 * 1024,
+        _ => rate,
+    }
+}
+
+// convert 100G, 10K, 2M to number of bits
+pub fn getrate_in_bits(rate: &str) -> u64 {
+    if rate.eq("abcdef") {
+        return 0;
+    }
+    let kmg = rate.chars().last().unwrap();
+    match kmg {
+        'k' | 'K' | 'm' | 'M' | 'g' | 'G' => kmg_to_bits(
+            rate.strip_suffix(|_: char| true)
+                .unwrap()
+                .parse::<u64>()
+                .unwrap(),
+            kmg,
+        ),
+        c => {
+            if c.is_alphabetic() {
+                println!("Invalid character in bitrate {}, using default", rate);
+                0
+            } else {
+                rate.parse::<u64>().unwrap()
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub enum PerfMode {
     SERVER,
@@ -33,6 +67,7 @@ pub struct PerfParams {
     pub idle_timeout: u32,
     pub num_streams: u8,
     pub mss: u32,
+    pub bitrate: u64,
     pub sendbuf: u32,
     pub recvbuf: u32,
     pub skip_tls: bool,
@@ -56,6 +91,7 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
     let mut mss: u32 = 0;
     let mut sendbuf: u32 = 0;
     let mut recvbuf: u32 = 0;
+    let mut bitrate: String = String::from("abcdef");
     let mut skip_tls: bool = false;
     let mut verbose = false;
     let mut debug = false;
@@ -88,11 +124,16 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
             "Bind address to listen on",
         );
         args.refer(&mut dev)
-            .add_option(&["-b", "--bind-dev"], Store, "Bind to device");
+            .add_option(&["--bind-dev"], Store, "Bind to device");
         args.refer(&mut recv_timeout).add_option(
             &["--recv-timeout"],
             Store,
             "[sc] idle timeout for receiving data (default 120s)",
+        );
+        args.refer(&mut bitrate).add_option(
+            &["-b", "--bitrate"],
+            Store,
+            "[c] target bitrate in bits/sec (0 for unlimited), can be suffixed with [KMG] (default 1 Mbit/sec for UDP, unlimited for TCP/QUIC)",
         );
         args.refer(&mut time).add_option(
             &["-t", "--time"],
@@ -137,7 +178,7 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
         args.refer(&mut recvbuf).add_option(
             &["--recv-buf-size"],
             Store,
-            "[c] set socket receive buffer size [default: OS defined]",
+            "[c] set socket recv buffer size [default: OS defined]",
         );
         args.refer(&mut skip_tls).add_option(
             &["--skip-tls"],
@@ -166,6 +207,8 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
     if server {
         mode = PerfMode::SERVER;
     }
+    // println!("{}", getrate_in_bits(&bitrate));
+    let bitrate = getrate_in_bits(&bitrate);
     let params = PerfParams {
         mode,
         udp,
@@ -179,6 +222,7 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
         idle_timeout,
         num_streams,
         mss,
+        bitrate,
         sendbuf,
         recvbuf,
         skip_tls,

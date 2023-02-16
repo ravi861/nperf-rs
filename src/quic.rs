@@ -11,6 +11,9 @@ use crate::stream::Stream;
 use mio::unix::SourceFd;
 use mio::{event, Interest, Poll, Registry, Token};
 use quinn::{Connection, Endpoint, RecvStream, SendStream, TokioRuntime};
+
+use bytes::Bytes;
+use socket2::SockRef;
 //use rustls::PrivateKey;
 
 pub static PERF_CIPHER_SUITES: &[rustls::SupportedCipherSuite] = &[
@@ -137,7 +140,7 @@ pub fn server(addr: SocketAddr, skip_tls: bool) -> Quic {
     crypto.alpn_protocols = vec![b"perf".to_vec()];
 
     let mut transport = quinn::TransportConfig::default();
-    transport.initial_max_udp_payload_size(8192); //opt.initial_max_udp_payload_size);
+    transport.initial_max_udp_payload_size(1200);
 
     let mut server_config = if skip_tls {
         quinn::ServerConfig::with_crypto(Arc::new(NoProtectionServerConfig::new(Arc::new(crypto))))
@@ -180,8 +183,7 @@ pub async fn client(addr: SocketAddr, skip_tls: bool) -> Quic {
     crypto.alpn_protocols = vec![b"perf".to_vec()];
 
     let mut transport = quinn::TransportConfig::default();
-    transport.initial_max_udp_payload_size(8192); //opt.initial_max_udp_payload_size);
-                                                  // println!("{:?}", transport);
+    transport.initial_max_udp_payload_size(1200);
 
     let mut cfg = if skip_tls {
         quinn::ClientConfig::new(Arc::new(NoProtectionClientConfig::new(Arc::new(crypto))))
@@ -205,30 +207,91 @@ pub async fn client(addr: SocketAddr, skip_tls: bool) -> Quic {
     }
 }
 
-pub async fn read(q: &mut Quic) -> io::Result<usize> {
-    let mut buf = [0; 63 * 1024];
+pub async fn read_cookie(q: &mut Quic) -> io::Result<usize> {
+    let mut buf = [0; 128];
     let mut count = 0;
     for stream in &mut q.recv_streams {
         match stream.read(&mut buf).await {
             Ok(n) => match n {
-                Some(n) => count += n,
-                None => return Err(Error::last_os_error()),
+                Some(n) => {
+                    if n == 0 {
+                        println!("Zero read");
+                    }
+                    count += n;
+                }
+                None => {
+                    println!("Zero read quic");
+                    return Err(Error::last_os_error());
+                }
             },
-            Err(_e) => return Err(Error::last_os_error()),
+            Err(_e) => {
+                println!("{:?}", _e);
+                return Err(Error::last_os_error());
+            }
         }
     }
     Ok(count)
 }
 
-pub async fn write(q: &mut Quic, buf: &[u8]) -> io::Result<usize> {
+pub async fn read(q: &mut Quic) -> io::Result<usize> {
+    // let mut bufs = [
+    //     Bytes::new(), Bytes::new(), Bytes::new(), Bytes::new(),
+    //     Bytes::new(), Bytes::new(), Bytes::new(), Bytes::new(),
+    //     Bytes::new(), Bytes::new(), Bytes::new(), Bytes::new(),
+    //     Bytes::new(), Bytes::new(), Bytes::new(), Bytes::new(),
+    //     Bytes::new(), Bytes::new(), Bytes::new(), Bytes::new(),
+    //     Bytes::new(), Bytes::new(), Bytes::new(), Bytes::new(),
+    //     Bytes::new(), Bytes::new(), Bytes::new(), Bytes::new(),
+    //     Bytes::new(), Bytes::new(), Bytes::new(), Bytes::new(),
+    // ];
+    let mut buf = [0; 128 * 1024];
+    let mut count = 0;
+    for stream in &mut q.recv_streams {
+        // while let Some(size) = stream.read_chunks(&mut bufs[..]).await? {
+        //     let bytes_received: usize = bufs[..size].iter().map(|b| b.len()).sum();
+        //     count += bytes_received;
+        // }
+        // match stream.read_chunks(&mut bufs[..]).await {
+        match stream.read(&mut buf).await {
+            Ok(n) => match n {
+                Some(n) => {
+                    count += n;
+                }
+                None => {
+                    // println!("Zero read quic");
+                    return Err(Error::last_os_error());
+                }
+            },
+            Err(_e) => {
+                println!("{:?}", _e);
+                return Err(Error::last_os_error());
+            }
+        }
+    }
+    Ok(count)
+}
+
+pub async fn write_cookie(q: &mut Quic, buf: &[u8]) -> io::Result<usize> {
     for stream in &mut q.send_streams {
         match stream.write(buf).await {
             Ok(_) => {}
             Err(_e) => return Err(Error::last_os_error()),
         }
     }
-    Ok(buf.len())
+    Ok(buf.len() * q.send_streams.len())
 }
+
+pub async fn write(q: &mut Quic, buf: &'static [u8]) -> io::Result<usize> {
+    for stream in &mut q.send_streams {
+        match stream.write_chunk(Bytes::from_static(&buf)).await {
+            // match stream.write(buf).await {
+            Ok(_) => {}
+            Err(_e) => return Err(Error::last_os_error()),
+        }
+    }
+    Ok(buf.len() * q.send_streams.len())
+}
+
 struct SkipServerVerification;
 
 impl SkipServerVerification {

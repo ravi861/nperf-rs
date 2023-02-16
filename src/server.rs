@@ -187,6 +187,8 @@ impl ServerImpl {
                                 if pstream.curr_bytes > 0 {
                                     pstream.push_stat();
                                 }
+                                // let q: &mut Quic = (&mut pstream.stream).into();
+                                // println!("{:?}", q.conn.as_ref().unwrap().stats());
                             }
                             test.print_stats();
                             return Ok(0);
@@ -271,6 +273,7 @@ impl ServerImpl {
                                 loop {
                                     let d = match conn {
                                         Conn::QUIC => {
+                                            // println!("{}", pstream.blks);
                                             quic::read((&mut pstream.stream).into()).await
                                         }
                                         _ => pstream.read(),
@@ -300,15 +303,24 @@ impl ServerImpl {
                             if event.is_readable() {
                                 match test.conn() {
                                     Conn::QUIC => {
+                                        let mut count = 0;
                                         let pstream = &mut test.streams[token.0];
                                         let q: &mut Quic = (&mut pstream.stream).into();
-                                        let recv =
-                                            q.conn.as_ref().unwrap().accept_uni().await.unwrap();
-                                        println!("Quic Accept UNI: {:?}", recv.id());
-                                        q.recv_streams = Vec::from([recv]);
-                                        // Because it is a unidirectional stream, we can only receive not send back.
-                                        let _n = quic::read(q).await.unwrap();
-                                        // println!("Cookie: {:?}", n);
+                                        while count < 1 {
+                                            let recv = q
+                                                .conn
+                                                .as_ref()
+                                                .unwrap()
+                                                .accept_uni()
+                                                .await
+                                                .unwrap();
+                                            println!("Quic Accept UNI: {:?}", recv.id());
+                                            q.recv_streams.push(recv);
+                                            // Because it is a unidirectional stream, we can only receive not send back.
+                                            let _n = quic::read_cookie(q).await.unwrap();
+                                            println!("Cookie: {:?}", _n);
+                                            count += 1;
+                                        }
                                         pstream.curr_time = Instant::now();
                                         test.start = Instant::now();
                                     }

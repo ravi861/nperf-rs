@@ -93,16 +93,21 @@ impl ClientImpl {
                                 Conn::QUIC => {
                                     thread::sleep(Duration::from_millis(10));
                                     for pstream in &mut test.streams {
-                                        let q: &mut Quic = (&mut pstream.stream).into();
-                                        let stream =
-                                            q.conn.as_mut().unwrap().open_uni().await.unwrap();
-                                        println!("Quic Open UNI: {:?}", stream.id());
-                                        q.send_streams.push(stream);
-                                        match quic::write(q, make_cookie().as_bytes()).await {
-                                            Ok(_) => {}
-                                            Err(_e) => {
-                                                println!("Failed to send cookie");
-                                                continue;
+                                        for _ in 0..1 {
+                                            thread::sleep(Duration::from_millis(500));
+                                            let q: &mut Quic = (&mut pstream.stream).into();
+                                            let stream =
+                                                q.conn.as_mut().unwrap().open_uni().await.unwrap();
+                                            println!("Quic Open UNI: {:?}", stream.id());
+                                            q.send_streams.push(stream);
+                                            match quic::write_cookie(q, make_cookie().as_bytes())
+                                                .await
+                                            {
+                                                Ok(_) => {}
+                                                Err(_e) => {
+                                                    println!("Failed to send cookie");
+                                                    continue;
+                                                }
                                             }
                                         }
                                         pstream.stream.register(&mut poll, STREAM);
@@ -144,8 +149,10 @@ impl ClientImpl {
                                     for pstream in &mut test.streams {
                                         let q: &mut Quic = (&mut pstream.stream).into();
                                         for stream in &mut q.send_streams {
+                                            // println!("{:?}", stream);
                                             stream.finish().await.unwrap();
                                         }
+                                        // println!("{:?}", q.conn.as_ref().unwrap().stats());
                                     }
                                 }
                                 _ => {}
@@ -179,17 +186,18 @@ impl ClientImpl {
                                 let conn = test.conn();
                                 let mut bytes: u64 = 0;
                                 let mut blks: u64 = 0;
-                                let udp_buf = [1; 65500];
-                                let tcp_buf = [1; 131072];
+                                const TCP_BUF: [u8; 131072] = [1; 131072];
+                                const UDP_BUF: [u8; 32786] = [1; 32786];
+                                const QUIC_BUF: [u8; 65500] = [1; 65500];
                                 while try_later == false {
                                     for pstream in &mut test.streams {
+                                        // thread::sleep(Duration::from_millis(249));
                                         let d = match conn {
-                                            Conn::TCP => pstream.write(&tcp_buf.as_slice()),
-                                            Conn::UDP => pstream.write(&udp_buf.as_slice()),
+                                            Conn::TCP => pstream.write(&TCP_BUF.as_slice()),
+                                            Conn::UDP => pstream.write(&UDP_BUF.as_slice()),
                                             Conn::QUIC => {
-                                                let buf = [1; 1460];
                                                 let q: &mut Quic = (&mut pstream.stream).into();
-                                                quic::write(q, &buf.as_slice()).await
+                                                quic::write(q, &QUIC_BUF).await
                                             }
                                         };
                                         match d {
