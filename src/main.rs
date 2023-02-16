@@ -35,7 +35,7 @@ async fn main() -> io::Result<()> {
             let test = Test::from(&param);
             let mut client = ClientImpl::new(&param)?;
             client.run(test).await?;
+            exit(0);
         }
     }
-    Ok(())
 }

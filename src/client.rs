@@ -1,7 +1,7 @@
 use crate::params::PerfParams;
 use crate::quic::{self, Quic};
 use crate::stream::Stream;
-use crate::test::{Conn, PerfStream, Test, TestState};
+use crate::test::{Conn, PerfStream, Test, TestState, ONE_SEC};
 use mio::net::{TcpStream, UdpSocket};
 use mio::{Events, Interest, Poll, Token, Waker};
 use std::net::SocketAddr;
@@ -9,8 +9,6 @@ use std::time::{Duration, Instant};
 use std::{io, thread};
 
 use crate::net::*;
-
-const ONE_SEC: Duration = Duration::from_millis(1000);
 
 const CONTROL: Token = Token(1024);
 const STREAM: Token = Token(0);
@@ -25,6 +23,8 @@ impl ClientImpl {
         println!("Connecting to {}", make_addr(&params.bindaddr, params.port));
         let addr = (make_addr(&params.bindaddr, params.port)).parse().unwrap();
         let ctrl = TcpStream::connect(addr)?;
+        set_nodelay(&ctrl);
+        set_linger(&ctrl);
         println!("Control Connection MSS: {}", mss(&ctrl));
 
         Ok(ClientImpl {
@@ -69,8 +69,8 @@ impl ClientImpl {
                                             UdpSocket::bind("127.0.0.1:0".parse().unwrap())
                                                 .unwrap();
                                         stream.connect(self.server_addr).unwrap();
-                                        stream.print();
                                         stream.send("hello".as_bytes())?;
+                                        stream.print();
                                         test.streams.push(PerfStream::new(stream));
                                     }
                                     Conn::TCP => {
@@ -185,28 +185,38 @@ impl ClientImpl {
                             if event.is_writable() {
                                 let mut try_later = false;
                                 let conn = test.conn();
-                                let mut bytes: u64 = 0;
-                                let mut blks: u64 = 0;
+                                let test_bitrate = test.bitrate();
+                                let test_bytes = test.bytes();
+                                let test_blks = test.blks();
+                                let len = test.length();
+                                let test_time = test.time().clone();
                                 const TCP_BUF: [u8; 131072] = [1; 131072];
-                                const UDP_BUF: [u8; 32786] = [1; 32786];
+                                const UDP_BUF: [u8; 65500] = [1; 65500];
                                 const QUIC_BUF: [u8; 65500] = [1; 65500];
+
                                 while try_later == false {
                                     for pstream in &mut test.streams {
-                                        // thread::sleep(Duration::from_millis(249));
+                                        if test_bitrate != 0 {
+                                            let rate = (pstream.curr_bytes * 8) as f64
+                                                / pstream.curr_time.elapsed().as_secs_f64();
+                                            if rate as u64 > test_bitrate {
+                                                continue;
+                                            }
+                                        }
                                         let d = match conn {
-                                            Conn::TCP => pstream.write(&TCP_BUF.as_slice()),
-                                            Conn::UDP => pstream.write(&UDP_BUF.as_slice()),
+                                            Conn::TCP => pstream.write(&TCP_BUF[..len]),
+                                            Conn::UDP => pstream.write(&UDP_BUF[..len]),
                                             Conn::QUIC => {
                                                 let q: &mut Quic = (&mut pstream.stream).into();
-                                                quic::write(q, &QUIC_BUF).await
+                                                quic::write(q, &QUIC_BUF[..len]).await
                                             }
                                         };
                                         match d {
                                             Ok(n) => {
                                                 pstream.bytes += n as u64;
-                                                bytes += n as u64;
+                                                test.total_bytes += n as u64;
                                                 pstream.blks += 1;
-                                                blks += 1;
+                                                test.total_blks += 1;
                                                 pstream.curr_bytes += n as u64;
                                                 pstream.curr_blks += 1;
                                             }
@@ -216,12 +226,18 @@ impl ClientImpl {
                                                 break;
                                             }
                                         }
-                                        if pstream.curr_time.elapsed() > ONE_SEC {
+                                        if (test_blks != 0) && (test.total_blks >= test_blks)
+                                            || (test_bytes != 0) && (test.total_bytes >= test_bytes)
+                                            || pstream.curr_time.elapsed() > ONE_SEC
+                                        {
                                             pstream.push_stat();
                                             pstream.curr_time = Instant::now();
                                             pstream.curr_bytes = 0;
                                             pstream.curr_blks = 0;
                                             pstream.curr_iter += 1;
+                                            if test.start.elapsed() > test_time {
+                                                try_later = true;
+                                            }
                                             match conn {
                                                 Conn::QUIC | Conn::UDP => try_later = true,
                                                 _ => {}
@@ -229,11 +245,9 @@ impl ClientImpl {
                                         }
                                     }
                                 }
-                                test.total_bytes += bytes;
-                                test.total_blks += blks;
-                                if (test.blks() != 0) && (test.blks() < test.total_blks)
-                                    || (test.bytes() != 0) && (test.bytes() < test.total_bytes)
-                                    || (test.start.elapsed() > test.time())
+                                if (test_blks != 0) && (test.total_blks >= test_blks)
+                                    || (test_bytes != 0) && (test.total_bytes >= test_bytes)
+                                    || (test.start.elapsed() > test_time)
                                 {
                                     test.transition(TestState::TestEnd);
                                     send_state(&self.ctrl, TestState::TestEnd);

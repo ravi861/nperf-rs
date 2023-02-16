@@ -40,6 +40,11 @@ impl TestState {
 }
 
 pub const DEFAULT_SESSION_TIMEOUT: u32 = 120;
+pub const MAX_TCP_PAYLOAD: usize = 131071;
+pub const MAX_UDP_PAYLOAD: usize = 65500;
+pub const MAX_QUIC_PAYLOAD: usize = 65500;
+
+pub const ONE_SEC: Duration = Duration::from_secs(1);
 
 pub struct Statistics {
     iter: u64,
@@ -179,7 +184,7 @@ struct Settings {
     time: Duration,
     bytes: u64,
     blks: u64,
-    length: u32,
+    length: usize,
 }
 
 pub struct Test {
@@ -213,7 +218,7 @@ impl Test {
             time: Duration::from_secs(10),
             bytes: 0,
             blks: 0,
-            length: 0,
+            length: MAX_TCP_PAYLOAD,
         };
         Test {
             state,
@@ -244,14 +249,24 @@ impl Test {
         test.skip_tls = param.skip_tls;
         if param.udp {
             test.settings.conn = Conn::UDP;
+            test.settings.length = MAX_UDP_PAYLOAD;
         }
         if param.quic {
             test.settings.conn = Conn::QUIC;
+            test.settings.length = MAX_QUIC_PAYLOAD;
         }
         test.settings.time = Duration::from_secs(param.time);
-        test.settings.bytes = param.bytes;
-        test.settings.blks = param.blks;
-        test.settings.length = param.length;
+        if param.bytes > 0 {
+            test.settings.bytes = param.bytes;
+            test.settings.time = Duration::from_secs(3600);
+        }
+        if param.blks > 0 {
+            test.settings.blks = param.blks;
+            test.settings.time = Duration::from_secs(3600);
+        }
+        if param.length > 0 {
+            test.settings.length = param.length as usize;
+        }
         test
     }
     pub fn reset(&mut self) {
@@ -276,10 +291,10 @@ impl Test {
     pub fn mss(&self) -> u32 {
         return self.settings.mss;
     }
-    pub fn sndbuf(&self) -> u32 {
+    pub fn _sndbuf(&self) -> u32 {
         return self.settings.sndbuf as u32;
     }
-    pub fn rcvbuf(&self) -> u32 {
+    pub fn _rcvbuf(&self) -> u32 {
         return self.settings.rcvbuf as u32;
     }
     pub fn verbose(&self) -> bool {
@@ -307,6 +322,10 @@ impl Test {
         self.settings.conn
     }
     #[inline(always)]
+    pub fn bitrate(&self) -> u64 {
+        self.settings.bitrate
+    }
+    #[inline(always)]
     pub fn time(&self) -> Duration {
         self.settings.time
     }
@@ -318,7 +337,8 @@ impl Test {
     pub fn blks(&self) -> u64 {
         self.settings.blks
     }
-    pub fn length(&self) -> u32 {
+    #[inline(always)]
+    pub fn length(&self) -> usize {
         self.settings.length
     }
     pub fn set_idle_timeout(&mut self, idle_timeout: u32) {

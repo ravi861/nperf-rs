@@ -68,13 +68,13 @@ pub struct PerfParams {
     pub num_streams: u8,
     pub mss: u32,
     pub bitrate: u64,
-    pub sendbuf: u32,
-    pub recvbuf: u32,
-    pub skip_tls: bool,
     pub time: u64,
     pub bytes: u64,
     pub blks: u64,
     pub length: u32,
+    pub sendbuf: u32,
+    pub recvbuf: u32,
+    pub skip_tls: bool,
 }
 
 pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
@@ -89,19 +89,19 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
     let mut idle_timeout: u32 = 0;
     let mut num_streams: u8 = 1;
     let mut mss: u32 = 0;
+    let mut bitrate: String = String::from("abcdef");
+    let mut time: u64 = 10;
+    let mut bytes: String = String::from("abcdef");
+    let mut blks: u64 = 0;
+    let mut length: u32 = 0;
     let mut sendbuf: u32 = 0;
     let mut recvbuf: u32 = 0;
-    let mut bitrate: String = String::from("abcdef");
     let mut skip_tls: bool = false;
     let mut verbose = false;
     let mut debug = false;
-    let mut time: u64 = 10;
-    let mut bytes: u64 = 0;
-    let mut blks: u64 = 0;
-    let mut length: u32 = 0;
     {
         let mut args = ArgumentParser::new();
-        args.set_description("Greet somebody.");
+        args.set_description("[s] server only, [c] client only, [sc] both, [KMG] option supports a K/M/G suffix for kilo-, mega-, or giga-");
         args.refer(&mut server).add_option(
             &["-s", "--server"],
             StoreTrue,
@@ -112,28 +112,33 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
             StoreTrue,
             "[c] Start perf as client",
         );
+        args.refer(&mut port)
+            .add_option(&["-p", "--port"], Store, "[sc] Port server listens on");
         args.refer(&mut udp)
             .add_option(&["-u", "--udp"], StoreTrue, "[c] Use UDP");
         args.refer(&mut quic)
             .add_option(&["-q", "--quic"], StoreTrue, "[c] Use QUIC");
-        args.refer(&mut port)
-            .add_option(&["-p", "--port"], Store, "[s] Port server listen on");
         args.refer(&mut bindaddr).add_option(
             &["-B", "--bind-addr"],
             Store,
-            "Bind address to listen on",
+            "[s] Bind address to listen on",
         );
         args.refer(&mut dev)
-            .add_option(&["--bind-dev"], Store, "Bind to device");
+            .add_option(&["--bind-dev"], Store, "[s] Bind to device");
         args.refer(&mut recv_timeout).add_option(
             &["--recv-timeout"],
             Store,
             "[sc] idle timeout for receiving data (default 120s)",
         );
+        args.refer(&mut idle_timeout).add_option(
+            &["--idle-timeout"],
+            Store,
+            "[s] restart idle server after # seconds in case it got stuck (default - no timeout)",
+        );
         args.refer(&mut bitrate).add_option(
             &["-b", "--bitrate"],
             Store,
-            "[c] target bitrate in bits/sec (0 for unlimited), can be suffixed with [KMG] (default 1 Mbit/sec for UDP, unlimited for TCP/QUIC)",
+            "[c] [KMG] target bitrate in bits/sec (0 for unlimited), (default 1 Mbit/sec for UDP, unlimited for TCP/QUIC)",
         );
         args.refer(&mut time).add_option(
             &["-t", "--time"],
@@ -143,7 +148,7 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
         args.refer(&mut bytes).add_option(
             &["-n", "--bytes"],
             Store,
-            "[c] number of bytes to transmit (instead of -t)",
+            "[c] [KMG] target number of bytes to transmit (instead of -t)",
         );
         args.refer(&mut blks).add_option(
             &["-k", "--blocks"],
@@ -153,12 +158,7 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
         args.refer(&mut length).add_option(
             &["-l", "--length"],
             Store,
-            "[c] length of buffer to read or write (default 128 KB for TCP, dynamic or 1460 for UDP)",
-        );
-        args.refer(&mut idle_timeout).add_option(
-            &["--idle-timeout"],
-            Store,
-            "[s] restart idle server after # seconds in case it got stuck (default - no timeout)",
+            "[c] [KMG] length of buffer to read or write in bytes (default 128 KB for TCP, dynamic or 1460 for UDP)",
         );
         args.refer(&mut num_streams).add_option(
             &["-P", "--parallel"],
@@ -209,6 +209,7 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
     }
     // println!("{}", getrate_in_bits(&bitrate));
     let bitrate = getrate_in_bits(&bitrate);
+    let bytes = getrate_in_bits(&bytes);
     let params = PerfParams {
         mode,
         udp,
@@ -223,13 +224,13 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
         num_streams,
         mss,
         bitrate,
-        sendbuf,
-        recvbuf,
-        skip_tls,
         time,
         bytes,
         blks,
         length,
+        sendbuf,
+        recvbuf,
+        skip_tls,
     };
     Ok(params)
 }

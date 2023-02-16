@@ -13,8 +13,6 @@ use mio::{event, Interest, Poll, Registry, Token};
 use quinn::{Connection, Endpoint, RecvStream, SendStream, TokioRuntime};
 
 use bytes::Bytes;
-use socket2::SockRef;
-//use rustls::PrivateKey;
 
 pub static PERF_CIPHER_SUITES: &[rustls::SupportedCipherSuite] = &[
     rustls::cipher_suite::TLS13_AES_128_GCM_SHA256,

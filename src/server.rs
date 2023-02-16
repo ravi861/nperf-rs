@@ -1,11 +1,11 @@
 use crate::params::PerfParams;
 use crate::quic::{self, Quic};
 use crate::stream::Stream;
-use crate::test::{Conn, PerfStream, Test, TestState};
+use crate::test::{Conn, PerfStream, Test, TestState, ONE_SEC};
 use mio::net::{TcpListener, TcpStream, UdpSocket};
 use mio::{Events, Interest, Poll, Token, Waker};
 use std::net::SocketAddr;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use core::panic;
 
@@ -16,7 +16,6 @@ const TCP_LISTENER: Token = Token(1025);
 const UDP_LISTENER: Token = Token(1026);
 const QUIC_LISTENER: Token = Token(1027);
 const TOKEN_START: usize = 0;
-const ONE_SEC: Duration = Duration::from_millis(1000);
 
 pub struct ServerImpl {
     addr: SocketAddr,
@@ -79,6 +78,7 @@ impl ServerImpl {
                                     }
                                     println!("Accepted ctrl connection from {}", addr);
                                     set_nodelay(&stream);
+                                    set_linger(&stream);
                                     self.ctrl = Some(stream);
                                     poll.registry().register(
                                         self.ctrl.as_mut().unwrap(),
@@ -265,7 +265,6 @@ impl ServerImpl {
                                 loop {
                                     let d = match conn {
                                         Conn::QUIC => {
-                                            // println!("{}", pstream.blks);
                                             quic::read((&mut pstream.stream).into()).await
                                         }
                                         _ => pstream.read(),

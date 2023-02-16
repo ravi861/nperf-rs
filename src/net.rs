@@ -6,6 +6,7 @@ use crate::{stream::Stream, test::TestState};
 use std::io::{self, Read, Write};
 use std::net::SocketAddr;
 use std::os::unix::io::AsRawFd;
+use std::time::Duration;
 
 pub fn gettime() -> String {
     return Local::now().format("%Y-%m-%d %H:%M:%S.%6f").to_string();
@@ -95,7 +96,17 @@ pub fn set_nodelay<T: Stream + AsRawFd + 'static>(stream: &T) {
         }
     }
 }
-pub fn set_send_buffer_size<T: Stream + AsRawFd + 'static>(stream: &T, sz: usize) {
+pub fn set_linger<T: Stream + AsRawFd + 'static>(stream: &T) {
+    let sck = SockRef::from(stream);
+    match sck.set_linger(Some(Duration::from_secs(1))) {
+        Ok(_) => return,
+        Err(e) => {
+            println!("Failed to set nodelay {}", e.to_string());
+            return;
+        }
+    }
+}
+pub fn _set_send_buffer_size<T: Stream + AsRawFd + 'static>(stream: &T, sz: usize) {
     let sck = SockRef::from(stream);
     match sck.set_send_buffer_size(sz) {
         Ok(_) => return,
@@ -105,7 +116,7 @@ pub fn set_send_buffer_size<T: Stream + AsRawFd + 'static>(stream: &T, sz: usize
         }
     }
 }
-pub fn set_recv_buffer_size<T: Stream + AsRawFd + 'static>(stream: &T, sz: usize) {
+pub fn _set_recv_buffer_size<T: Stream + AsRawFd + 'static>(stream: &T, sz: usize) {
     let sck = SockRef::from(stream);
     match sck.set_recv_buffer_size(sz) {
         Ok(_) => return,
