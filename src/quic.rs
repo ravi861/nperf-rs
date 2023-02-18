@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crate::net::*;
 use crate::noprotection::{NoProtectionClientConfig, NoProtectionServerConfig};
-use crate::stream::Stream;
+use crate::test::{Conn, Stream};
 use mio::unix::SourceFd;
 use mio::{event, Interest, Poll, Registry, Token};
 use quinn::{Connection, Endpoint, RecvStream, SendStream, TokioRuntime};
@@ -53,7 +53,7 @@ impl event::Source for Quic {
 }
 
 impl Stream for Quic {
-    fn read(&mut self) -> io::Result<usize> {
+    fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
         //let recv = self.conn.as_ref().unwrap().accept_uni();
         //std::io::Read::read(self, buf)
         Ok(0)
@@ -80,7 +80,7 @@ impl Stream for Quic {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
-    fn print(&self) {
+    fn print_new_stream(&self) {
         //let sck = SockRef::from(stream);
         println!(
             "[{:>3}] local {:?}, peer {}", // sndbuf {} rcvbuf {}",
@@ -90,6 +90,9 @@ impl Stream for Quic {
             // sck.send_buffer_size().unwrap(),
             // sck.recv_buffer_size().unwrap()
         );
+    }
+    fn socket_type(&self) -> Conn {
+        Conn::QUIC
     }
 }
 
@@ -253,7 +256,7 @@ pub async fn read(q: &mut Quic) -> io::Result<usize> {
     //     Bytes::new(), Bytes::new(), Bytes::new(), Bytes::new(),
     //     Bytes::new(), Bytes::new(), Bytes::new(), Bytes::new(),
     // ];
-    let mut buf = [0; 128 * 1024];
+    let mut buf = [0; 131072];
     let mut count = 0;
     for stream in &mut q.recv_streams {
         // while let Some(size) = stream.read_chunks(&mut bufs[..]).await? {

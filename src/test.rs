@@ -1,13 +1,27 @@
-use crate::{params::PerfParams, stream::*};
-use mio::Token;
+use crate::params::PerfParams;
+use mio::{Poll, Token};
 use serde::{Deserialize, Serialize};
 use serde_json;
 use std::{
+    any::Any,
     fmt::Display,
     io::{self, Error},
     ops::Sub,
+    os::unix::prelude::RawFd,
     time::{Duration, Instant},
 };
+
+pub trait Stream {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize>;
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize>;
+    fn fd(&self) -> RawFd;
+    fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+    fn register(&mut self, poll: &mut Poll, token: Token);
+    fn deregister(&mut self, poll: &mut Poll);
+    fn print_new_stream(&self);
+    fn socket_type(&self) -> Conn;
+}
 
 #[derive(Clone, Copy, Debug)]
 pub enum TestState {
@@ -52,87 +66,128 @@ pub struct Statistics {
     end: Instant,
     bytes: u64,
     blks: u64,
+    last: u64,
 }
 
 impl Display for Statistics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{:>3}s {} {} bytes {} blocks",
+            "{:>4}s  {}",
             self.iter,
             Test::kmg(self.bytes, self.start, self.end),
-            self.bytes,
-            self.blks
         )
     }
 }
+
+pub enum StreamMode {
+    SENDER,
+    RECEIVER,
+    BOTH,
+}
+impl Display for StreamMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StreamMode::SENDER => write!(f, "sender"),
+            StreamMode::RECEIVER => write!(f, "receiver"),
+            StreamMode::BOTH => write!(f, "both"),
+        }
+    }
+}
 pub struct PerfStream {
+    pub mode: StreamMode,
     pub stream: Box<dyn Stream>,
     pub created: Instant,
     pub start: Instant,
     pub bytes: u64,
     pub blks: u64,
+    pub prev_last_blk: u64,
     pub stats: Vec<Statistics>,
     pub curr_time: Instant,
     pub curr_bytes: u64,
     pub curr_blks: u64,
     pub curr_iter: u64,
+    pub curr_last_blk: u64,
 }
 
 impl Display for PerfStream {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let out = match self.mode {
+            StreamMode::SENDER => format!("{}", self.blks),
+            StreamMode::RECEIVER => match self.stream.as_ref().socket_type() {
+                Conn::UDP => format!("{}/{}", self.curr_last_blk - self.blks, self.blks),
+                Conn::TCP => format!("{}", self.blks),
+                Conn::QUIC => format!("{}", self.blks),
+            },
+            StreamMode::BOTH => format!(""),
+        };
         write!(
             f,
-            "[{:>3}] {:>3}s {} {} bytes {} blocks",
+            "[{:>3}] {:>4}s  {}  {}",
             self.stream.fd(),
             Instant::now().sub(self.start).as_secs(),
             Test::kmg(self.bytes, self.start, Instant::now()),
-            self.bytes,
-            self.blks
+            out
         )
     }
 }
 
 impl PerfStream {
-    pub fn new<T: Stream + 'static>(stream: T) -> PerfStream {
+    pub fn new<T: Stream + 'static>(stream: T, mode: StreamMode) -> PerfStream {
         PerfStream {
+            mode,
             stream: Box::from(stream),
             created: Instant::now(),
             start: Instant::now(),
             bytes: 0,
             blks: 0,
+            prev_last_blk: 0,
             stats: Vec::new(),
             curr_time: Instant::now(),
             curr_bytes: 0,
             curr_blks: 0,
             curr_iter: 0,
+            curr_last_blk: 0,
         }
     }
-    pub fn push_stat(&mut self) {
+    pub fn push_stat(&mut self, debug: bool) {
         let stat = Statistics {
             iter: self.curr_iter,
             start: self.curr_time,
             end: Instant::now(),
             bytes: self.curr_bytes,
             blks: self.curr_blks,
+            last: self.curr_last_blk - self.prev_last_blk,
         };
-        println!("[{:>3}] {}", self.stream.fd(), stat);
+        let out = match self.mode {
+            StreamMode::SENDER => format!("{}", stat.blks),
+            StreamMode::RECEIVER => match self.stream.as_ref().socket_type() {
+                Conn::UDP => format!("{}/{}", stat.last - stat.blks, stat.blks),
+                Conn::TCP => format!("{}", stat.blks),
+                Conn::QUIC => format!("{}", stat.blks),
+            },
+            StreamMode::BOTH => String::new(),
+        };
+        println!("[{:>3}] {}  {}", self.stream.fd(), stat, out);
+        if debug {
+            println!(
+                "interval {} secs, {} bytes",
+                Instant::now().sub(self.start).as_secs_f64(),
+                stat.bytes
+            )
+        }
         self.stats.push(stat);
         // let sum: u64 = self.stats.iter().rev().take(2).map(|s| s.bytes).sum();
     }
     #[inline]
-    pub fn read(&mut self) -> io::Result<usize> {
-        match self.stream.read() {
+    pub fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self.stream.read(buf) {
             Ok(0) => {
                 // println!("Zero bytes read");
                 return Ok(0);
             }
             Ok(n) => {
                 return Ok(n);
-            }
-            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                // println!("{:?}", e);
-                return Err(Error::last_os_error());
             }
             Err(e) => {
                 // println!("{:?}", e);
@@ -146,11 +201,9 @@ impl PerfStream {
             Ok(n) => {
                 return Ok(n);
             }
-            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                return Err(Error::last_os_error());
-            }
             Err(e) => {
-                return Err(e.into());
+                // println!("In write {:?}", e);
+                return Err(e);
             }
         }
     }
@@ -190,7 +243,7 @@ struct Settings {
 pub struct Test {
     state: TestState,
     verbose: bool,
-    debug: bool,
+    pub debug: bool,
     skip_tls: bool,
     pub cookie: String,
     settings: Settings,
@@ -354,38 +407,88 @@ impl Test {
         return self.reset_counter;
     }
     pub fn print_stats(&self) {
-        println!("- - - - - - - - - - - - - - - - - - - - - - - - - - - -");
+        println!("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
         for pstream in &self.streams {
             println!("{}", pstream);
+            if self.debug {
+                println!(
+                    "interval {} secs, {} bytes",
+                    Instant::now().sub(pstream.start).as_secs_f64(),
+                    pstream.bytes
+                )
+            }
         }
         if self.streams.len() > 1 {
             let bytes: u64 = self.streams.iter().map(|s| s.bytes).sum();
             let blks: u64 = self.streams.iter().map(|s| s.blks).sum();
             println!(
-                "[Sum] {:>3}s {} {} bytes {} blocks",
+                "[Sum]  {:>3}s  {}  {}",
                 Instant::now().sub(self.start).as_secs(),
                 Test::kmg(bytes, self.start, Instant::now()),
-                bytes,
                 blks
             );
+            if self.debug {
+                println!(
+                    "interval {} secs, {} bytes",
+                    Instant::now().sub(self.start).as_secs_f64(),
+                    bytes
+                )
+            }
         }
+        println!("");
     }
     pub fn kmg(bytes: u64, start: Instant, end: Instant) -> String {
         if bytes >= 1024 * 1024 * 1024 {
             let b: f64 = bytes as f64 / (1024 * 1024 * 1024) as f64;
             let r = (b * 8 as f64) / end.sub(start).as_secs_f64();
-            return format!("{:.2} GBytes {:.1} Gbits/sec", b, r).to_string();
+            return format!("{:<6.2} GBytes   {:<5.1} Gbits/sec", b, r).to_string();
         } else if bytes >= 1024 * 1024 {
             let b: f64 = bytes as f64 / (1024 * 1024) as f64;
             let r = (b * 8 as f64) / end.sub(start).as_secs_f64();
-            return format!("{:.2} MBytes {:.1} Mbits/sec", b, r).to_string();
+            return format!("{:<6.2} MBytes   {:<5.1} Mbits/sec", b, r).to_string();
         } else if bytes >= 1024 {
             let b: f64 = bytes as f64 / 1024 as f64;
             let r = (b * 8 as f64) / end.sub(start).as_secs_f64();
-            return format!("{:.2} KBytes {:.1} Kbits/sec", b, r).to_string();
+            return format!("{:<6.2} KBytes   {:<5.1} Kbits/sec", b, r).to_string();
         } else {
             let r = (bytes as f64 * 8 as f64) / end.sub(start).as_secs_f64();
-            return format!("{} Bytes {:.1} bits/sec", bytes, r).to_string();
+            return format!("{} Bytes    {:<5.1} bits/sec", bytes, r).to_string();
         }
+    }
+    pub fn server_header(&self) {
+        println!(
+            "Starting Test: protocol: {}, {} streams",
+            self.conn(),
+            self.num_streams()
+        );
+        println!("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
+        match self.conn() {
+            Conn::UDP => {
+                println!("[ FD]  Time  Transfer        Rate             Lost/Total Datagrams")
+            }
+            Conn::TCP => println!("[ FD]  Time  Transfer        Rate             Rx packets"),
+            Conn::QUIC => {
+                println!("[ FD]  Time  Transfer        Rate              Total Datagrams")
+            }
+        }
+        println!("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
+    }
+    pub fn client_header(&self) {
+        println!(
+            "Starting Test: protocol: {}, {} streams",
+            self.conn(),
+            self.num_streams()
+        );
+        println!("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
+        match self.conn() {
+            Conn::UDP => {
+                println!("[ FD]  Time  Transfer        Rate             Total Datagrams")
+            }
+            Conn::TCP => println!("[ FD]  Time  Transfer        Rate             Tx packets"),
+            Conn::QUIC => {
+                println!("[ FD]  Time  Transfer        Rate              Total Datagrams")
+            }
+        }
+        println!("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
     }
 }

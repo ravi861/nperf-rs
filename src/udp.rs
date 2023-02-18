@@ -7,13 +7,15 @@ use std::{
 use mio::{net::UdpSocket, Interest, Poll, Token};
 use socket2::SockRef;
 
-use crate::stream::Stream;
+use crate::test::{Conn, Stream};
 
 impl Stream for UdpSocket {
     #[inline(always)]
-    fn read(&mut self) -> io::Result<usize> {
-        let mut buf = [0; 65536];
-        self.recv(&mut buf)
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        // let mut buf = [0; 65536];
+        self.recv(buf)
+        // println!("{}", u64::from_be_bytes(buf[0..8].try_into().unwrap()));
+        // Ok(buf.len())
     }
     #[inline(always)]
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
@@ -36,7 +38,7 @@ impl Stream for UdpSocket {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
-    fn print(&self) {
+    fn print_new_stream(&self) {
         let sck = SockRef::from(self);
         println!(
             "[{:>3}] local {}, peer {} sndbuf {} rcvbuf {}",
@@ -46,6 +48,9 @@ impl Stream for UdpSocket {
             sck.send_buffer_size().unwrap(),
             sck.recv_buffer_size().unwrap()
         );
+    }
+    fn socket_type(&self) -> Conn {
+        Conn::UDP
     }
 }
 

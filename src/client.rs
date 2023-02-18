@@ -1,7 +1,6 @@
 use crate::params::PerfParams;
 use crate::quic::{self, Quic};
-use crate::stream::Stream;
-use crate::test::{Conn, PerfStream, Test, TestState, ONE_SEC};
+use crate::test::{Conn, PerfStream, Stream, Test, TestState, ONE_SEC};
 use mio::net::{TcpStream, UdpSocket};
 use mio::{Events, Interest, Poll, Token, Waker};
 use std::net::SocketAddr;
@@ -44,6 +43,7 @@ impl ClientImpl {
 
         loop {
             poll.poll(&mut events, Some(Duration::from_millis(100)))?;
+            // println!("{:?}", events);
             for event in events.iter() {
                 match event.token() {
                     CONTROL => match test.state() {
@@ -70,25 +70,33 @@ impl ClientImpl {
                                                 .unwrap();
                                         stream.connect(self.server_addr).unwrap();
                                         stream.send("hello".as_bytes())?;
-                                        stream.print();
-                                        test.streams.push(PerfStream::new(stream));
+                                        stream.print_new_stream();
+                                        test.streams.push(PerfStream::new(
+                                            stream,
+                                            crate::test::StreamMode::SENDER,
+                                        ));
                                     }
                                     Conn::TCP => {
                                         let stream = TcpStream::connect(self.server_addr)?;
-                                        stream.print();
-                                        test.streams.push(PerfStream::new(stream));
+                                        stream.print_new_stream();
+                                        test.streams.push(PerfStream::new(
+                                            stream,
+                                            crate::test::StreamMode::SENDER,
+                                        ));
                                     }
                                     Conn::QUIC => {
                                         let stream =
                                             quic::client(self.server_addr, test.skip_tls()).await;
-                                        stream.print();
-                                        test.streams.push(PerfStream::new(stream));
+                                        stream.print_new_stream();
+                                        test.streams.push(PerfStream::new(
+                                            stream,
+                                            crate::test::StreamMode::SENDER,
+                                        ));
                                     }
                                 }
                             }
                             test.transition(TestState::Wait);
                         }
-                        TestState::TestRunning => {}
                         TestState::TestStart => {
                             match test.conn() {
                                 Conn::QUIC => {
@@ -129,14 +137,20 @@ impl ClientImpl {
                                     }
                                 }
                             }
-                            println!(
-                                "Starting Test: protocol: {}, {} stream",
-                                test.conn(),
-                                test.num_streams()
-                            );
+                            test.client_header();
                             test.start = Instant::now();
                             test.transition(TestState::TestRunning);
                             send_state(&self.ctrl, TestState::TestRunning);
+                        }
+                        TestState::TestRunning => {
+                            // this state for this token can only be hit if the server is shutdown unplanned
+                            for pstream in &mut test.streams {
+                                if pstream.curr_bytes > 0 {
+                                    pstream.push_stat(test.debug);
+                                }
+                            }
+                            test.print_stats();
+                            return Ok(());
                         }
                         TestState::TestEnd => {
                             match test.conn() {
@@ -161,7 +175,7 @@ impl ClientImpl {
                             self.ctrl.shutdown(std::net::Shutdown::Both)?;
                             for pstream in &mut test.streams {
                                 if pstream.curr_bytes > 0 {
-                                    pstream.push_stat();
+                                    pstream.push_stat(test.debug);
                                 }
                             }
                             test.print_stats();
@@ -184,14 +198,18 @@ impl ClientImpl {
                         TestState::TestRunning => {
                             if event.is_writable() {
                                 let mut try_later = false;
+
+                                // fetch test attributes
                                 let conn = test.conn();
                                 let test_bitrate = test.bitrate();
                                 let test_bytes = test.bytes();
                                 let test_blks = test.blks();
                                 let len = test.length();
                                 let test_time = test.time().clone();
+
+                                // setup buffers
                                 const TCP_BUF: [u8; 131072] = [1; 131072];
-                                const UDP_BUF: [u8; 65500] = [1; 65500];
+                                let mut UDP_BUF: [u8; 65500] = [1; 65500];
                                 const QUIC_BUF: [u8; 65500] = [1; 65500];
 
                                 while try_later == false {
@@ -201,11 +219,20 @@ impl ClientImpl {
                                                 / pstream.curr_time.elapsed().as_secs_f64();
                                             if rate as u64 > test_bitrate {
                                                 continue;
+                                                // } else {
+                                                //     println!(
+                                                //         "{:.6}",
+                                                //         pstream.curr_time.elapsed().as_secs_f64()
+                                                //     );
                                             }
                                         }
                                         let d = match conn {
                                             Conn::TCP => pstream.write(&TCP_BUF[..len]),
-                                            Conn::UDP => pstream.write(&UDP_BUF[..len]),
+                                            Conn::UDP => {
+                                                UDP_BUF[0..8]
+                                                    .copy_from_slice(&pstream.blks.to_be_bytes());
+                                                pstream.write(&UDP_BUF[..len])
+                                            }
                                             Conn::QUIC => {
                                                 let q: &mut Quic = (&mut pstream.stream).into();
                                                 quic::write(q, &QUIC_BUF[..len]).await
@@ -230,7 +257,7 @@ impl ClientImpl {
                                             || (test_bytes != 0) && (test.total_bytes >= test_bytes)
                                             || pstream.curr_time.elapsed() > ONE_SEC
                                         {
-                                            pstream.push_stat();
+                                            pstream.push_stat(test.debug);
                                             pstream.curr_time = Instant::now();
                                             pstream.curr_bytes = 0;
                                             pstream.curr_blks = 0;

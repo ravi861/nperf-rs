@@ -1,7 +1,6 @@
 use crate::params::PerfParams;
 use crate::quic::{self, Quic};
-use crate::stream::Stream;
-use crate::test::{Conn, PerfStream, Test, TestState, ONE_SEC};
+use crate::test::{Conn, PerfStream, Stream, StreamMode, Test, TestState, ONE_SEC};
 use mio::net::{TcpListener, TcpStream, UdpSocket};
 use mio::{Events, Interest, Poll, Token, Waker};
 use std::net::SocketAddr;
@@ -102,10 +101,7 @@ impl ServerImpl {
                                 let ctrl_ref = self.ctrl.as_ref().unwrap();
                                 test.transition(TestState::TestStart);
                                 send_state(ctrl_ref, TestState::TestStart);
-                                println!(
-                                    "Starting Test: protocol: TCP, {} streams",
-                                    test.num_streams()
-                                );
+                                test.server_header();
                             }
                         }
                         _ => {
@@ -161,23 +157,32 @@ impl ServerImpl {
                             }
                         }
                         TestState::TestStart => {
-                            let ctrl_ref = self.ctrl.as_ref().unwrap();
-                            let buf = read_socket(ctrl_ref).await?;
-                            let state = TestState::from_i8(buf.as_bytes()[0] as i8);
-                            test.transition(state);
+                            if event.is_readable() {
+                                let ctrl_ref = self.ctrl.as_ref().unwrap();
+                                let state = match read_socket(ctrl_ref).await {
+                                    Ok(buf) => TestState::from_i8(buf.as_bytes()[0] as i8),
+                                    Err(_) => TestState::TestEnd,
+                                };
+                                test.transition(state);
+                            }
                         }
                         TestState::TestRunning => {
-                            let ctrl_ref = self.ctrl.as_ref().unwrap();
-                            let buf = read_socket(ctrl_ref).await?;
-                            let state = TestState::from_i8(buf.as_bytes()[0] as i8);
-                            test.transition(state);
-                            waker.wake()?;
+                            // this state for this token can only be hit if the client is shutdown unplanned
+                            if event.is_readable() {
+                                let ctrl_ref = self.ctrl.as_ref().unwrap();
+                                let state = match read_socket(ctrl_ref).await {
+                                    Ok(buf) => TestState::from_i8(buf.as_bytes()[0] as i8),
+                                    Err(_) => TestState::TestEnd,
+                                };
+                                test.transition(state);
+                                waker.wake()?;
+                            }
                         }
                         TestState::CreateStreams => {}
                         TestState::TestEnd => {
                             for pstream in &mut test.streams {
                                 if pstream.curr_bytes > 0 {
-                                    pstream.push_stat();
+                                    pstream.push_stat(test.debug);
                                 }
                                 // let q: &mut Quic = (&mut pstream.stream).into();
                                 // println!("{:?}", q.conn.as_ref().unwrap().stats());
@@ -216,10 +221,7 @@ impl ServerImpl {
                                     let ctrl_ref = self.ctrl.as_ref().unwrap();
                                     test.transition(TestState::TestStart);
                                     send_state(ctrl_ref, TestState::TestStart);
-                                    println!(
-                                        "Starting Test: protocol: UDP, {} streams",
-                                        test.num_streams()
-                                    );
+                                    test.server_header();
                                 }
                             }
                         }
@@ -247,10 +249,7 @@ impl ServerImpl {
                                     let ctrl_ref = self.ctrl.as_ref().unwrap();
                                     test.transition(TestState::TestStart);
                                     send_state(ctrl_ref, TestState::TestStart);
-                                    println!(
-                                        "Starting Test: protocol: QUIC, {} streams",
-                                        test.num_streams()
-                                    );
+                                    test.server_header();
                                 }
                                 break;
                             }
@@ -260,6 +259,9 @@ impl ServerImpl {
                     token => match test.state() {
                         TestState::TestRunning => {
                             if event.is_readable() {
+                                // setup buffers
+                                let mut buf: [u8; 131072] = [0; 131072];
+
                                 let conn = test.conn();
                                 let pstream = &mut test.streams[token.0];
                                 loop {
@@ -267,7 +269,8 @@ impl ServerImpl {
                                         Conn::QUIC => {
                                             quic::read((&mut pstream.stream).into()).await
                                         }
-                                        _ => pstream.read(),
+                                        Conn::TCP => pstream.read(&mut buf),
+                                        Conn::UDP => pstream.read(&mut buf),
                                     };
                                     match d {
                                         Ok(0) => break,
@@ -277,15 +280,18 @@ impl ServerImpl {
                                             pstream.curr_bytes += n as u64;
                                             pstream.blks += 1;
                                             pstream.curr_blks += 1;
+                                            pstream.curr_last_blk =
+                                                u64::from_be_bytes(buf[0..8].try_into().unwrap());
                                         }
                                         Err(_e) => break,
                                     }
                                     if pstream.curr_time.elapsed() > ONE_SEC {
-                                        pstream.push_stat();
+                                        pstream.push_stat(test.debug);
                                         pstream.curr_time = Instant::now();
                                         pstream.curr_bytes = 0;
                                         pstream.curr_blks = 0;
                                         pstream.curr_iter += 1;
+                                        pstream.prev_last_blk = pstream.curr_last_blk;
                                     }
                                 }
                             }
@@ -317,7 +323,8 @@ impl ServerImpl {
                                     }
                                     _ => {
                                         let pstream = &mut test.streams[token.0];
-                                        let _n = pstream.read()?;
+                                        let mut buf = [0; 32];
+                                        let _n = pstream.read(&mut buf)?;
                                         // println!("Cookie: {}", n);
                                         // keep this here for most recent start time of actual data
                                         pstream.curr_time = Instant::now();
@@ -350,8 +357,9 @@ impl ServerImpl {
             .register(&mut stream, token, Interest::READABLE)
             .unwrap();
 
-        stream.print();
-        test.streams.push(PerfStream::new(stream));
+        stream.print_new_stream();
+        test.streams
+            .push(PerfStream::new(stream, StreamMode::RECEIVER));
         Ok(())
     }
 
@@ -366,8 +374,11 @@ impl ServerImpl {
             .reregister(self.u.as_mut().unwrap(), token, Interest::READABLE)
             .unwrap();
 
-        self.u.as_ref().unwrap().print();
-        test.streams.push(PerfStream::new(self.u.take().unwrap()));
+        self.u.as_ref().unwrap().print_new_stream();
+        test.streams.push(PerfStream::new(
+            self.u.take().unwrap(),
+            StreamMode::RECEIVER,
+        ));
         Ok(())
     }
 
@@ -382,8 +393,11 @@ impl ServerImpl {
             .reregister(self.q.as_mut().unwrap(), token, Interest::READABLE)
             .unwrap();
 
-        self.q.as_ref().unwrap().print();
-        test.streams.push(PerfStream::new(self.q.take().unwrap()));
+        self.q.as_ref().unwrap().print_new_stream();
+        test.streams.push(PerfStream::new(
+            self.q.take().unwrap(),
+            StreamMode::RECEIVER,
+        ));
         Ok(())
     }
 }

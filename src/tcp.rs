@@ -1,4 +1,4 @@
-use crate::stream::Stream;
+use crate::test::{Conn, Stream};
 use mio::{net::TcpStream, Interest, Poll, Token};
 use socket2::SockRef;
 use std::{
@@ -9,9 +9,9 @@ use std::{
 
 impl Stream for TcpStream {
     #[inline(always)]
-    fn read(&mut self) -> io::Result<usize> {
-        let mut buf = [0; 131072];
-        std::io::Read::read(self, &mut buf)
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        // let mut buf = [0; 131072];
+        std::io::Read::read(self, buf)
     }
     #[inline(always)]
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
@@ -34,7 +34,7 @@ impl Stream for TcpStream {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
-    fn print(&self) {
+    fn print_new_stream(&self) {
         let sck = SockRef::from(self);
         println!(
             "[{:>3}] local {}, peer {} sndbuf {} rcvbuf {}",
@@ -44,6 +44,9 @@ impl Stream for TcpStream {
             sck.send_buffer_size().unwrap(),
             sck.recv_buffer_size().unwrap()
         );
+    }
+    fn socket_type(&self) -> Conn {
+        Conn::TCP
     }
 }
 

@@ -2,7 +2,8 @@ use chrono::Local;
 use mio::net::{TcpStream, UdpSocket};
 use socket2::{Domain, Protocol, SockRef, Socket, Type};
 
-use crate::{stream::Stream, test::TestState};
+use crate::{test::Stream, test::TestState};
+use std::io::Error;
 use std::io::{self, Read, Write};
 use std::net::SocketAddr;
 use std::os::unix::io::AsRawFd;
@@ -25,6 +26,7 @@ pub fn write_socket(mut stream: &TcpStream, buf: &[u8]) -> io::Result<usize> {
             return Ok(0);
         }
         Err(e) => {
+            println!("Some error {}", e);
             return Err(e.into());
         }
     }
@@ -35,19 +37,15 @@ pub async fn read_socket(mut stream: &TcpStream) -> io::Result<String> {
     match stream.read(&mut buf) {
         Ok(0) => {
             println!("Zero bytes read");
-            return Ok(String::new());
+            return Err(Error::last_os_error());
         }
         Ok(n) => {
             let data = String::from_utf8(buf[0..n].to_vec()).unwrap().to_string();
             return Ok(data);
         }
-        Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-            println!("Would block read socket {}", e);
-            return Ok(e.to_string());
-        }
         Err(e) => {
             println!("Some error {}", e);
-            return Ok(e.to_string());
+            return Err(e.into());
         }
     }
 }

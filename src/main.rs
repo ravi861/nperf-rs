@@ -13,7 +13,6 @@ mod noprotection;
 mod params;
 mod quic;
 mod server;
-mod stream;
 mod tcp;
 mod test;
 mod udp;
