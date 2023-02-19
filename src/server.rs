@@ -314,8 +314,10 @@ impl ServerImpl {
                                             println!("Quic Accept UNI: {:?}", recv.id());
                                             q.recv_streams.push(recv);
                                             // Because it is a unidirectional stream, we can only receive not send back.
-                                            let _n = quic::read_cookie(q).await.unwrap();
-                                            println!("Cookie: {:?}", _n);
+                                            let n = quic::read_cookie(q).await.unwrap();
+                                            if test.debug {
+                                                println!("Cookie: {:?}", n);
+                                            }
                                             count += 1;
                                         }
                                         pstream.curr_time = Instant::now();
@@ -324,13 +326,17 @@ impl ServerImpl {
                                     _ => {
                                         let pstream = &mut test.streams[token.0];
                                         let mut buf = [0; 32];
-                                        let _n = pstream.read(&mut buf)?;
-                                        // println!("Cookie: {}", n);
+                                        let n = pstream.read(&mut buf)?;
+                                        if test.debug {
+                                            println!("Cookie: {:?}", n);
+                                        }
                                         // keep this here for most recent start time of actual data
                                         pstream.curr_time = Instant::now();
                                         test.start = Instant::now();
                                     }
                                 }
+                                test.cookie_count += 1;
+                                if test.num_streams() == test.cookie_count {}
                             }
                         }
                         TestState::TestEnd => {}

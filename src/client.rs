@@ -18,10 +18,10 @@ pub struct ClientImpl {
 }
 
 impl ClientImpl {
-    pub fn new(params: &PerfParams) -> io::Result<ClientImpl> {
+    pub async fn new(params: &PerfParams) -> io::Result<ClientImpl> {
         println!("Connecting to {}", make_addr(&params.bindaddr, params.port));
         let addr = (make_addr(&params.bindaddr, params.port)).parse().unwrap();
-        let ctrl = TcpStream::connect(addr)?;
+        let ctrl = crate::tcp::connect(addr).await?;
         set_nodelay(&ctrl);
         set_linger(&ctrl);
         println!("Control Connection MSS: {}", mss(&ctrl));
@@ -66,8 +66,7 @@ impl ClientImpl {
                                 match test.conn() {
                                     Conn::UDP => {
                                         let stream =
-                                            UdpSocket::bind("127.0.0.1:0".parse().unwrap())
-                                                .unwrap();
+                                            UdpSocket::bind("0.0.0.0:0".parse().unwrap()).unwrap();
                                         stream.connect(self.server_addr).unwrap();
                                         stream.send("hello".as_bytes())?;
                                         stream.print_new_stream();
@@ -77,7 +76,7 @@ impl ClientImpl {
                                         ));
                                     }
                                     Conn::TCP => {
-                                        let stream = TcpStream::connect(self.server_addr)?;
+                                        let stream = crate::tcp::connect(self.server_addr).await?;
                                         stream.print_new_stream();
                                         test.streams.push(PerfStream::new(
                                             stream,
@@ -209,7 +208,7 @@ impl ClientImpl {
 
                                 // setup buffers
                                 const TCP_BUF: [u8; 131072] = [1; 131072];
-                                let mut UDP_BUF: [u8; 65500] = [1; 65500];
+                                let mut udp_buf: [u8; 65500] = [1; 65500];
                                 const QUIC_BUF: [u8; 65500] = [1; 65500];
 
                                 while try_later == false {
@@ -229,9 +228,10 @@ impl ClientImpl {
                                         let d = match conn {
                                             Conn::TCP => pstream.write(&TCP_BUF[..len]),
                                             Conn::UDP => {
-                                                UDP_BUF[0..8]
-                                                    .copy_from_slice(&pstream.blks.to_be_bytes());
-                                                pstream.write(&UDP_BUF[..len])
+                                                udp_buf[0..8].copy_from_slice(
+                                                    &(pstream.blks + 1).to_be_bytes(),
+                                                );
+                                                pstream.write(&udp_buf[..len])
                                             }
                                             Conn::QUIC => {
                                                 let q: &mut Quic = (&mut pstream.stream).into();

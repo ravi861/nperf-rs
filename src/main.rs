@@ -32,7 +32,7 @@ async fn main() -> io::Result<()> {
         },
         PerfMode::CLIENT => {
             let test = Test::from(&param);
-            let mut client = ClientImpl::new(&param)?;
+            let mut client = ClientImpl::new(&param).await?;
             client.run(test).await?;
             exit(0);
         }
