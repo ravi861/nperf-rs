@@ -15,6 +15,7 @@ const STREAM: Token = Token(0);
 pub struct ClientImpl {
     server_addr: SocketAddr,
     ctrl: TcpStream,
+    running: bool,
 }
 
 impl ClientImpl {
@@ -29,6 +30,7 @@ impl ClientImpl {
         Ok(ClientImpl {
             server_addr: addr,
             ctrl,
+            running: false,
         })
     }
     pub async fn run(&mut self, mut test: Test) -> io::Result<()> {
@@ -48,7 +50,6 @@ impl ClientImpl {
                 match event.token() {
                     CONTROL => match test.state() {
                         TestState::Start => {
-                            if event.is_readable() {}
                             if event.is_writable() {
                                 write_socket(&self.ctrl, make_cookie().as_bytes())?;
                                 test.transition(TestState::Wait);
@@ -118,8 +119,6 @@ impl ClientImpl {
                                                 }
                                             }
                                         }
-                                        pstream.stream.register(&mut poll, STREAM);
-                                        pstream.curr_time = Instant::now();
                                     }
                                 }
                                 _ => {
@@ -131,25 +130,30 @@ impl ClientImpl {
                                                 continue;
                                             }
                                         }
-                                        pstream.stream.register(&mut poll, STREAM);
-                                        pstream.curr_time = Instant::now();
                                     }
                                 }
                             }
-                            test.client_header();
-                            test.start = Instant::now();
-                            test.transition(TestState::TestRunning);
-                            send_state(&self.ctrl, TestState::TestRunning);
+                            test.transition(TestState::Wait);
                         }
                         TestState::TestRunning => {
-                            // this state for this token can only be hit if the server is shutdown unplanned
-                            for pstream in &mut test.streams {
-                                if pstream.curr_bytes > 0 {
-                                    pstream.push_stat(test.debug);
+                            if self.running {
+                                // this state for this token can only be hit if the server is shutdown unplanned
+                                for pstream in &mut test.streams {
+                                    if pstream.curr_bytes > 0 {
+                                        pstream.push_stat(test.debug);
+                                    }
                                 }
+                                test.print_stats();
+                                return Ok(());
+                            } else {
+                                for pstream in &mut test.streams {
+                                    pstream.stream.register(&mut poll, STREAM);
+                                    pstream.curr_time = Instant::now();
+                                }
+                                self.running = true;
+                                test.client_header();
+                                test.start = Instant::now();
                             }
-                            test.print_stats();
-                            return Ok(());
                         }
                         TestState::TestEnd => {
                             match test.conn() {

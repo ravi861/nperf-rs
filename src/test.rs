@@ -5,7 +5,7 @@ use serde_json;
 use std::{
     any::Any,
     fmt::Display,
-    io::{self, Error},
+    io::{self},
     ops::Sub,
     os::unix::prelude::RawFd,
     time::{Duration, Instant},

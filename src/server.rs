@@ -19,7 +19,7 @@ const TOKEN_START: usize = 0;
 pub struct ServerImpl {
     addr: SocketAddr,
     ctrl: Option<TcpStream>,
-    t: TcpListener,
+    t: Option<TcpListener>,
     u: Option<UdpSocket>,
     q: Option<Quic>,
 }
@@ -38,20 +38,26 @@ impl ServerImpl {
         Ok(ServerImpl {
             addr,
             ctrl: None,
-            t: listener,
+            t: Some(listener),
             u: None,
             q: None,
         })
     }
     pub async fn run(&mut self, test: &mut Test) -> std::io::Result<i8> {
         let mut poll = Poll::new().unwrap();
-        poll.registry().register(
-            &mut self.t,
-            TCP_LISTENER,
-            Interest::READABLE | Interest::WRITABLE,
-        )?;
-        let waker = Waker::new(poll.registry(), CONTROL)?;
         let mut events = Events::with_capacity(128);
+
+        let stream = crate::tcp::accept(self.t.as_mut().unwrap()).await?;
+        if test.verbose() {
+            println!("Time: {}", gettime());
+        }
+        println!("Accepted ctrl connection from {}", stream.peer_addr()?);
+        set_nodelay(&stream);
+        set_linger(&stream);
+        self.ctrl = Some(stream);
+        poll.registry()
+            .register(self.ctrl.as_mut().unwrap(), CONTROL, Interest::READABLE)?;
+        let waker = Waker::new(poll.registry(), CONTROL)?;
 
         loop {
             poll.poll(&mut events, test.idle_timeout())?;
@@ -67,58 +73,21 @@ impl ServerImpl {
             // println!("{:?}", events);
             for event in events.iter() {
                 match event.token() {
-                    TCP_LISTENER => match test.state() {
-                        TestState::Start => {
-                            let (stream, addr) = self.t.accept().unwrap();
-                            match self.ctrl {
-                                None => {
-                                    if test.verbose() {
-                                        println!("Time: {}", gettime());
-                                    }
-                                    println!("Accepted ctrl connection from {}", addr);
-                                    set_nodelay(&stream);
-                                    set_linger(&stream);
-                                    self.ctrl = Some(stream);
-                                    poll.registry().register(
-                                        self.ctrl.as_mut().unwrap(),
-                                        CONTROL,
-                                        Interest::READABLE,
-                                    )?;
-                                }
-                                _ => {
-                                    println!("Denying ctrl connection from {}", addr);
-                                    send_state(&stream, TestState::AccessDenied);
-                                }
-                            }
-                        }
-                        TestState::CreateStreams => {
-                            self.create_tcp_stream(&mut poll, test).unwrap();
-
-                            if test.streams.len() > test.num_streams() as usize {
-                                panic!("Incorrect parallel streams");
-                            }
-                            if test.streams.len() == test.num_streams() as usize {
-                                let ctrl_ref = self.ctrl.as_ref().unwrap();
-                                test.transition(TestState::TestStart);
-                                send_state(ctrl_ref, TestState::TestStart);
-                                test.server_header();
-                            }
-                        }
-                        _ => {
-                            println!(
-                                "Unexpected state {:?} for LISTENER ({:?})",
-                                test.state(),
-                                event
-                            );
-                            break;
-                        }
-                    },
                     CONTROL => match test.state() {
                         TestState::Start => {
                             if event.is_readable() {
-                                let ctrl_ref = self.ctrl.as_ref().unwrap();
-                                let buf = read_socket(ctrl_ref).await?;
-                                test.cookie = buf;
+                                let ctrl_ref = self.ctrl.as_mut().unwrap();
+                                let mut buf = [0; 32];
+                                match ctrl_ref.read(&mut buf) {
+                                    Ok(_) => {
+                                        test.cookie =
+                                            String::from_utf8(buf.to_vec()).unwrap().to_string()
+                                    }
+                                    Err(e) => {
+                                        println!("Unable to read cookie, e {}", e.to_string());
+                                        return Ok(2);
+                                    }
+                                };
                                 test.transition(TestState::ParamExchange);
                                 send_state(ctrl_ref, TestState::ParamExchange);
                             }
@@ -133,6 +102,14 @@ impl ServerImpl {
                                     println!("\tTCP MSS: {}", test.mss());
                                 }
                                 match test.conn() {
+                                    Conn::TCP => {
+                                        // no need of a new tcp listener. Just use ctrl listener for tcp
+                                        poll.registry().register(
+                                            self.t.as_mut().unwrap(),
+                                            TCP_LISTENER,
+                                            Interest::READABLE | Interest::WRITABLE,
+                                        )?;
+                                    }
                                     Conn::UDP => {
                                         self.u = Some(create_mio_udp_socket(self.addr.into()));
                                         poll.registry().register(
@@ -150,22 +127,15 @@ impl ServerImpl {
                                             Interest::READABLE | Interest::WRITABLE,
                                         )?;
                                     }
-                                    _ => {}
                                 }
                                 test.transition(TestState::CreateStreams);
                                 send_state(ctrl_ref, TestState::CreateStreams);
                             }
                         }
-                        TestState::TestStart => {
-                            if event.is_readable() {
-                                let ctrl_ref = self.ctrl.as_ref().unwrap();
-                                let state = match read_socket(ctrl_ref).await {
-                                    Ok(buf) => TestState::from_i8(buf.as_bytes()[0] as i8),
-                                    Err(_) => TestState::TestEnd,
-                                };
-                                test.transition(state);
-                            }
-                        }
+                        // CreateStreams handled by each socket type below
+                        TestState::CreateStreams => {}
+                        // TestStart is managed by the data connection tokens
+                        TestState::TestStart => {}
                         TestState::TestRunning => {
                             // this state for this token can only be hit if the client is shutdown unplanned
                             if event.is_readable() {
@@ -178,14 +148,11 @@ impl ServerImpl {
                                 waker.wake()?;
                             }
                         }
-                        TestState::CreateStreams => {}
                         TestState::TestEnd => {
                             for pstream in &mut test.streams {
                                 if pstream.curr_bytes > 0 {
                                     pstream.push_stat(test.debug);
                                 }
-                                // let q: &mut Quic = (&mut pstream.stream).into();
-                                // println!("{:?}", q.conn.as_ref().unwrap().stats());
                             }
                             test.print_stats();
                             return Ok(0);
@@ -199,21 +166,27 @@ impl ServerImpl {
                             break;
                         }
                     },
+                    TCP_LISTENER => match test.state() {
+                        TestState::CreateStreams => {
+                            self.create_tcp_stream(&mut poll, test).unwrap();
+
+                            if test.streams.len() > test.num_streams() as usize {
+                                panic!("Incorrect parallel streams");
+                            }
+                            if test.streams.len() == test.num_streams() as usize {
+                                let ctrl_ref = self.ctrl.as_ref().unwrap();
+                                test.transition(TestState::TestStart);
+                                send_state(ctrl_ref, TestState::TestStart);
+                                test.server_header();
+                            }
+                        }
+                        _ => {}
+                    },
                     UDP_LISTENER => match test.state() {
                         TestState::CreateStreams => {
                             if event.is_readable() {
                                 self.create_udp_stream(&mut poll, test).unwrap();
 
-                                if test.streams.len() < test.num_streams() as usize {
-                                    self.u = Some(create_mio_udp_socket(self.addr.into()));
-                                    poll.registry()
-                                        .register(
-                                            self.u.as_mut().unwrap(),
-                                            UDP_LISTENER,
-                                            Interest::READABLE | Interest::WRITABLE,
-                                        )
-                                        .unwrap();
-                                }
                                 if test.streams.len() > test.num_streams() as usize {
                                     panic!("Incorrect parallel streams");
                                 }
@@ -232,16 +205,6 @@ impl ServerImpl {
                             if event.is_readable() {
                                 self.create_quic_stream(&mut poll, test).await.unwrap();
 
-                                if test.streams.len() < test.num_streams() as usize {
-                                    self.q = Some(quic::server(self.addr.into(), test.skip_tls()));
-                                    poll.registry()
-                                        .register(
-                                            self.q.as_mut().unwrap(),
-                                            QUIC_LISTENER,
-                                            Interest::READABLE | Interest::WRITABLE,
-                                        )
-                                        .unwrap();
-                                }
                                 if test.streams.len() > test.num_streams() as usize {
                                     panic!("Incorrect parallel streams");
                                 }
@@ -296,7 +259,7 @@ impl ServerImpl {
                                 }
                             }
                         }
-                        TestState::CreateStreams | TestState::TestStart => {
+                        TestState::TestStart => {
                             if event.is_readable() {
                                 match test.conn() {
                                     Conn::QUIC => {
@@ -336,7 +299,10 @@ impl ServerImpl {
                                     }
                                 }
                                 test.cookie_count += 1;
-                                if test.num_streams() == test.cookie_count {}
+                                if test.num_streams() == test.cookie_count {
+                                    test.transition(TestState::TestRunning);
+                                    send_state(self.ctrl.as_ref().unwrap(), TestState::TestRunning);
+                                }
                             }
                         }
                         TestState::TestEnd => {}
@@ -355,7 +321,7 @@ impl ServerImpl {
     }
 
     fn create_tcp_stream(&mut self, poll: &mut Poll, test: &mut Test) -> Result<(), ()> {
-        let (mut stream, _) = self.t.accept().unwrap();
+        let (mut stream, _) = self.t.as_ref().unwrap().accept().unwrap();
 
         let token = Token(TOKEN_START + test.tokens.len());
         test.tokens.push(token);
@@ -366,6 +332,8 @@ impl ServerImpl {
         stream.print_new_stream();
         test.streams
             .push(PerfStream::new(stream, StreamMode::RECEIVER));
+
+        // no need of a new listener (unlike udp and quic)
         Ok(())
     }
 
@@ -385,6 +353,18 @@ impl ServerImpl {
             self.u.take().unwrap(),
             StreamMode::RECEIVER,
         ));
+
+        // recreate a new udp socket to wait for new streams
+        if test.streams.len() < test.num_streams() as usize {
+            self.u = Some(create_mio_udp_socket(self.addr.into()));
+            poll.registry()
+                .register(
+                    self.u.as_mut().unwrap(),
+                    UDP_LISTENER,
+                    Interest::READABLE | Interest::WRITABLE,
+                )
+                .unwrap();
+        }
         Ok(())
     }
 
@@ -404,6 +384,18 @@ impl ServerImpl {
             self.q.take().unwrap(),
             StreamMode::RECEIVER,
         ));
+
+        // recreate a new quic connection to wait for new streams
+        if test.streams.len() < test.num_streams() as usize {
+            self.q = Some(quic::server(self.addr.into(), test.skip_tls()));
+            poll.registry()
+                .register(
+                    self.q.as_mut().unwrap(),
+                    QUIC_LISTENER,
+                    Interest::READABLE | Interest::WRITABLE,
+                )
+                .unwrap();
+        }
         Ok(())
     }
 }
