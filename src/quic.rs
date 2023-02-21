@@ -181,7 +181,7 @@ pub fn server(addr: SocketAddr, skip_tls: bool) -> Quic {
 }
 
 pub async fn client(addr: SocketAddr, skip_tls: bool) -> Quic {
-    let socket = UdpSocket::bind("127.0.0.1:0".parse::<SocketAddr>().unwrap()).unwrap();
+    let socket = UdpSocket::bind("0.0.0.0:0".parse::<SocketAddr>().unwrap()).unwrap();
     let fd = socket.as_raw_fd();
     let endpoint = quinn::Endpoint::new(Default::default(), None, socket, TokioRuntime).unwrap();
 
