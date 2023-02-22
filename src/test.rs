@@ -1,6 +1,6 @@
 use crate::params::PerfParams;
 use mio::{Poll, Token};
-use serde::{Deserialize, Serialize};
+use serde::{ser::SerializeStruct, Deserialize, Serialize, Serializer};
 use serde_json;
 use std::{
     any::Any,
@@ -10,6 +10,49 @@ use std::{
     os::unix::prelude::RawFd,
     time::{Duration, Instant},
 };
+
+struct Dummy {}
+impl Stream for Dummy {
+    #[inline(always)]
+    fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+        Ok(0)
+    }
+    #[inline(always)]
+    fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+        Ok(0)
+    }
+    fn fd(&self) -> RawFd {
+        0
+    }
+    fn register(&mut self, _poll: &mut Poll, _token: Token) {}
+    fn deregister(&mut self, _poll: &mut Poll) {}
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+    fn print_new_stream(&self) {}
+    fn socket_type(&self) -> Conn {
+        Conn::TCP
+    }
+}
+
+impl Default for Box<dyn Stream> {
+    fn default() -> Box<(dyn Stream + 'static)> {
+        Box::new(Dummy {})
+    }
+}
+
+pub const DEFAULT_SESSION_TIMEOUT: u32 = 120;
+pub const MAX_TCP_PAYLOAD: usize = 131071;
+pub const MAX_UDP_PAYLOAD: usize = 65500;
+pub const MAX_QUIC_PAYLOAD: usize = 65500;
+
+pub const ONE_SEC: Duration = Duration::from_secs(1);
+pub const ONE_GB: u64 = 1024 * 1024 * 1024;
+pub const ONE_MB: u64 = 1024 * 1024;
+pub const ONE_KB: u64 = 1024;
 
 pub trait Stream {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize>;
@@ -32,7 +75,7 @@ pub enum TestState {
     TestRunning,
     TestEnd,
     Wait,
-    AccessDenied,
+    ExchangeResults,
     End,
 }
 
@@ -46,45 +89,26 @@ impl TestState {
             4 => TestState::TestRunning,
             5 => TestState::TestEnd,
             6 => TestState::Wait,
-            7 => TestState::AccessDenied,
+            7 => TestState::ExchangeResults,
             8 => TestState::End,
             _ => panic!("Unknown value: {}", value),
         }
     }
 }
 
-pub const DEFAULT_SESSION_TIMEOUT: u32 = 120;
-pub const MAX_TCP_PAYLOAD: usize = 131071;
-pub const MAX_UDP_PAYLOAD: usize = 65500;
-pub const MAX_QUIC_PAYLOAD: usize = 65500;
-
-pub const ONE_SEC: Duration = Duration::from_secs(1);
-
-pub struct Statistics {
-    iter: u64,
-    start: Instant,
-    end: Instant,
-    bytes: u64,
-    blks: u64,
-    last: u64,
-}
-
-impl Display for Statistics {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{:>4}s  {}",
-            self.iter,
-            Test::kmg(self.bytes, self.start, self.end),
-        )
+impl Default for TestState {
+    fn default() -> Self {
+        TestState::Start
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq)]
 pub enum StreamMode {
     SENDER,
     RECEIVER,
     BOTH,
 }
+
 impl Display for StreamMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -94,20 +118,79 @@ impl Display for StreamMode {
         }
     }
 }
-pub struct PerfStream {
-    pub mode: StreamMode,
-    pub stream: Box<dyn Stream>,
+
+pub struct Timers {
     pub created: Instant,
     pub start: Instant,
+    pub end: Instant,
+    pub curr: Instant,
+}
+impl Default for Timers {
+    fn default() -> Self {
+        Timers {
+            created: Instant::now(),
+            start: Instant::now(),
+            end: Instant::now(),
+            curr: Instant::now(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct StreamData {
+    pub iter: u64,
     pub bytes: u64,
     pub blks: u64,
+    // misc could be anything
+    pub misc: u64,
+}
+impl Default for StreamData {
+    fn default() -> Self {
+        StreamData {
+            iter: 0,
+            bytes: 0,
+            blks: 0,
+            misc: 0,
+        }
+    }
+}
+
+pub struct Statistics {
+    timers: Timers,
+    data: StreamData,
+}
+
+impl Display for Statistics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{:>4}s  {}",
+            self.data.iter,
+            Test::kmg(
+                self.data.bytes,
+                self.timers.end.sub(self.timers.start).as_secs_f64()
+            ),
+        )
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct PerfStream {
+    pub mode: StreamMode,
+    #[serde(skip)]
+    pub stream: Box<dyn Stream>,
+    #[serde(skip)]
+    pub timers: Timers,
+    pub elapsed: f64,
+    pub bytes: u64,
+    pub blks: u64,
+    #[serde(skip)]
     pub prev_last_blk: u64,
+    #[serde(skip)]
     pub stats: Vec<Statistics>,
-    pub curr_time: Instant,
-    pub curr_bytes: u64,
-    pub curr_blks: u64,
-    pub curr_iter: u64,
-    pub curr_last_blk: u64,
+    #[serde(skip)]
+    pub temp: StreamData,
+    pub lost: u64,
 }
 
 impl Display for PerfStream {
@@ -115,7 +198,7 @@ impl Display for PerfStream {
         let out = match self.mode {
             StreamMode::SENDER => format!("{}", self.blks),
             StreamMode::RECEIVER => match self.stream.as_ref().socket_type() {
-                Conn::UDP => format!("{}/{}", self.curr_last_blk - self.blks, self.blks),
+                Conn::UDP => format!("{}/{}", self.temp.misc - self.blks, self.blks),
                 Conn::TCP => format!("{}", self.blks),
                 Conn::QUIC => format!("{}", self.blks),
             },
@@ -123,11 +206,12 @@ impl Display for PerfStream {
         };
         write!(
             f,
-            "[{:>3}] {:>4}s  {}  {}",
+            "[{:>3}] {:>4}s  {}  {}  {}",
             self.stream.fd(),
-            Instant::now().sub(self.start).as_secs(),
-            Test::kmg(self.bytes, self.start, Instant::now()),
-            out
+            self.elapsed as u64,
+            Test::kmg(self.bytes, self.elapsed),
+            out,
+            self.mode
         )
     }
 }
@@ -137,34 +221,37 @@ impl PerfStream {
         PerfStream {
             mode,
             stream: Box::from(stream),
-            created: Instant::now(),
-            start: Instant::now(),
+            timers: Timers::default(),
+            elapsed: 0.0,
             bytes: 0,
             blks: 0,
             prev_last_blk: 0,
             stats: Vec::new(),
-            curr_time: Instant::now(),
-            curr_bytes: 0,
-            curr_blks: 0,
-            curr_iter: 0,
-            curr_last_blk: 0,
+            temp: StreamData::default(),
+            lost: 0,
         }
     }
     pub fn push_stat(&mut self, debug: bool) {
-        let stat = Statistics {
-            iter: self.curr_iter,
-            start: self.curr_time,
-            end: Instant::now(),
-            bytes: self.curr_bytes,
-            blks: self.curr_blks,
-            last: self.curr_last_blk - self.prev_last_blk,
+        let mut stat = Statistics {
+            timers: Timers::default(),
+            data: StreamData {
+                iter: self.temp.iter,
+                bytes: self.temp.bytes,
+                blks: self.temp.blks,
+                misc: self.temp.misc - self.prev_last_blk,
+            },
         };
+        stat.timers.start = self.timers.curr;
+
         let out = match self.mode {
-            StreamMode::SENDER => format!("{}", stat.blks),
+            StreamMode::SENDER => format!("{}", stat.data.blks),
             StreamMode::RECEIVER => match self.stream.as_ref().socket_type() {
-                Conn::UDP => format!("{}/{}", stat.last - stat.blks, stat.blks),
-                Conn::TCP => format!("{}", stat.blks),
-                Conn::QUIC => format!("{}", stat.blks),
+                Conn::UDP => {
+                    self.lost += stat.data.misc - stat.data.blks;
+                    format!("{}/{}", stat.data.misc - stat.data.blks, stat.data.blks)
+                }
+                Conn::TCP => format!("{}", stat.data.blks),
+                Conn::QUIC => format!("{}", stat.data.blks),
             },
             StreamMode::BOTH => String::new(),
         };
@@ -172,8 +259,8 @@ impl PerfStream {
         if debug {
             println!(
                 "interval {} secs, {} bytes",
-                Instant::now().sub(self.start).as_secs_f64(),
-                stat.bytes
+                stat.timers.start.elapsed().as_secs_f64(),
+                stat.data.bytes
             )
         }
         self.stats.push(stat);
@@ -239,31 +326,11 @@ struct Settings {
     blks: u64,
     length: usize,
 }
-
-pub struct Test {
-    state: TestState,
-    verbose: bool,
-    pub debug: bool,
-    skip_tls: bool,
-    pub cookie: String,
-    pub cookie_count: u8,
-    settings: Settings,
-    idle_timeout_in_secs: Option<Duration>,
-    reset_counter: u16,
-    pub streams: Vec<PerfStream>,
-    pub tokens: Vec<Token>,
-    pub start: Instant,
-    pub total_bytes: u64,
-    pub total_blks: u64,
-}
-
-impl Test {
-    pub fn new() -> Test {
-        let state = TestState::Start;
-        let num_streams: u8 = 1;
-        let settings = Settings {
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
             conn: Conn::TCP,
-            num_streams,
+            num_streams: 1,
             recv_timeout_in_secs: DEFAULT_SESSION_TIMEOUT,
             mss: 0,
             bitrate: 0,
@@ -273,10 +340,59 @@ impl Test {
             bytes: 0,
             blks: 0,
             length: MAX_TCP_PAYLOAD,
-        };
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Test {
+    pub mode: StreamMode,
+    #[serde(skip)]
+    state: TestState,
+    #[serde(skip)]
+    verbose: bool,
+    #[serde(skip)]
+    pub debug: bool,
+    #[serde(skip)]
+    skip_tls: bool,
+    #[serde(skip)]
+    pub cookie: String,
+    #[serde(skip)]
+    pub cookie_count: u8,
+    #[serde(skip)]
+    settings: Settings,
+    #[serde(skip)]
+    idle_timeout_in_secs: Option<Duration>,
+    #[serde(skip)]
+    reset_counter: u16,
+    pub streams: Vec<PerfStream>,
+    #[serde(skip)]
+    pub peer_streams: Vec<PerfStream>,
+    #[serde(skip)]
+    pub tokens: Vec<Token>,
+    #[serde(skip)]
+    pub timers: Timers,
+    pub elapsed: f64,
+    pub total_bytes: u64,
+    pub total_blks: u64,
+    pub udp_lost: u64,
+    #[serde(skip)]
+    peer_elapsed: f64,
+    #[serde(skip)]
+    peer_total_bytes: u64,
+    #[serde(skip)]
+    peer_total_blks: u64,
+    #[serde(skip)]
+    peer_udp_lost: u64,
+    peer_mode: StreamMode,
+}
+
+impl Test {
+    pub fn new() -> Test {
         Test {
-            state,
-            settings,
+            mode: StreamMode::RECEIVER,
+            state: TestState::default(),
+            settings: Settings::default(),
             verbose: false,
             debug: false,
             skip_tls: false,
@@ -285,10 +401,18 @@ impl Test {
             idle_timeout_in_secs: None,
             reset_counter: 0,
             streams: Vec::new(),
+            peer_streams: Vec::new(),
             tokens: Vec::new(),
-            start: Instant::now(),
+            timers: Timers::default(),
+            elapsed: 0.0,
             total_bytes: 0,
             total_blks: 0,
+            udp_lost: 0,
+            peer_elapsed: 0.0,
+            peer_total_bytes: 0,
+            peer_total_blks: 0,
+            peer_udp_lost: 0,
+            peer_mode: StreamMode::SENDER,
         }
     }
     pub fn from(param: &PerfParams) -> Test {
@@ -336,6 +460,15 @@ impl Test {
         }
         self.state = state;
     }
+    pub fn from_serde(&mut self, json: String) {
+        let t: Test = serde_json::from_str(&json).unwrap();
+        self.peer_streams = t.streams;
+        self.peer_elapsed = t.elapsed;
+        self.peer_total_bytes = t.total_bytes;
+        self.peer_total_blks = t.total_blks;
+        self.peer_udp_lost = t.udp_lost;
+        self.peer_mode = t.mode;
+    }
     #[inline(always)]
     pub fn state(&self) -> TestState {
         self.state
@@ -377,6 +510,10 @@ impl Test {
         self.settings.conn
     }
     #[inline(always)]
+    pub fn mode(&self) -> StreamMode {
+        self.mode
+    }
+    #[inline(always)]
     pub fn bitrate(&self) -> u64 {
         self.settings.bitrate
     }
@@ -408,53 +545,110 @@ impl Test {
         self.reset_counter += 1;
         return self.reset_counter;
     }
+    pub fn start(&mut self) {
+        for pstream in &mut self.streams {
+            pstream.timers.curr = Instant::now();
+        }
+        self.timers.start = Instant::now();
+    }
+    pub fn end(&mut self, poll: &mut Poll) {
+        for pstream in &mut self.streams {
+            if pstream.temp.bytes > 0 {
+                pstream.push_stat(self.debug);
+            }
+            pstream.timers.end = Instant::now();
+            pstream.elapsed = pstream.timers.start.elapsed().as_secs_f64();
+            pstream.stream.deregister(poll);
+        }
+        self.elapsed = self.timers.start.elapsed().as_secs_f64();
+    }
+    pub fn results(&self) -> String {
+        serde_json::to_string(&self).unwrap()
+    }
     pub fn print_stats(&self) {
-        println!("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
+        println!("- - - - - - - - - - - - - - Results - - - - - - - - - - - - - - - -");
         for pstream in &self.streams {
             println!("{}", pstream);
             if self.debug {
-                println!(
-                    "interval {} secs, {} bytes",
-                    Instant::now().sub(pstream.start).as_secs_f64(),
-                    pstream.bytes
-                )
+                println!("interval {} secs, {} bytes", pstream.elapsed, pstream.bytes)
+            }
+        }
+        for pstream in &self.peer_streams {
+            println!("{}", pstream);
+            if self.debug {
+                println!("interval {} secs, {} bytes", pstream.elapsed, pstream.bytes)
             }
         }
         if self.streams.len() > 1 {
-            let bytes: u64 = self.streams.iter().map(|s| s.bytes).sum();
-            let blks: u64 = self.streams.iter().map(|s| s.blks).sum();
+            let udp_lost: u64 = self.streams.iter().map(|s| s.lost).sum();
+            let out = match self.mode {
+                StreamMode::SENDER => format!("{}", self.total_blks),
+                StreamMode::RECEIVER => match self.conn() {
+                    Conn::UDP => {
+                        format!("{}/{}", udp_lost, self.total_blks)
+                    }
+                    Conn::TCP => format!("{}", self.total_blks),
+                    Conn::QUIC => format!("{}", self.total_blks),
+                },
+                StreamMode::BOTH => String::new(),
+            };
             println!(
-                "[Sum]  {:>3}s  {}  {}",
-                Instant::now().sub(self.start).as_secs(),
-                Test::kmg(bytes, self.start, Instant::now()),
-                blks
+                "[Sum]  {:>3}s  {}  {}  {}",
+                self.elapsed as u64,
+                Test::kmg(self.total_bytes, self.elapsed),
+                out,
+                self.mode,
+            );
+            if self.debug {
+                println!("interval {} secs, {} bytes", self.elapsed, self.total_bytes);
+            }
+            if self.mode == StreamMode::RECEIVER {
+                println!("");
+                return;
+            }
+            let out = match self.peer_mode {
+                StreamMode::SENDER => format!("{}", self.peer_total_blks),
+                StreamMode::RECEIVER => match self.conn() {
+                    Conn::UDP => {
+                        format!("{}/{}", self.peer_udp_lost, self.peer_total_blks)
+                    }
+                    Conn::TCP => format!("{}", self.peer_total_blks),
+                    Conn::QUIC => format!("{}", self.peer_total_blks),
+                },
+                StreamMode::BOTH => String::new(),
+            };
+            println!(
+                "[Sum]  {:>3}s  {}  {}  {}",
+                self.peer_elapsed as u64,
+                Test::kmg(self.peer_total_bytes, self.peer_elapsed),
+                out,
+                self.peer_mode,
             );
             if self.debug {
                 println!(
                     "interval {} secs, {} bytes",
-                    Instant::now().sub(self.start).as_secs_f64(),
-                    bytes
-                )
+                    self.peer_elapsed, self.peer_total_bytes
+                );
             }
         }
         println!("");
     }
-    pub fn kmg(bytes: u64, start: Instant, end: Instant) -> String {
-        if bytes >= 1024 * 1024 * 1024 {
-            let b: f64 = bytes as f64 / (1024 * 1024 * 1024) as f64;
-            let r = (b * 8 as f64) / end.sub(start).as_secs_f64();
+    pub fn kmg(bytes: u64, dur: f64) -> String {
+        if bytes >= ONE_GB {
+            let b: f64 = bytes as f64 / ONE_GB as f64;
+            let r = (b * 8 as f64) / dur;
             return format!("{:<6.2} GBytes   {:<5.1} Gbits/sec", b, r).to_string();
-        } else if bytes >= 1024 * 1024 {
-            let b: f64 = bytes as f64 / (1024 * 1024) as f64;
-            let r = (b * 8 as f64) / end.sub(start).as_secs_f64();
+        } else if bytes >= ONE_MB {
+            let b: f64 = bytes as f64 / ONE_MB as f64;
+            let r = (b * 8 as f64) / dur;
             return format!("{:<6.2} MBytes   {:<5.1} Mbits/sec", b, r).to_string();
-        } else if bytes >= 1024 {
-            let b: f64 = bytes as f64 / 1024 as f64;
-            let r = (b * 8 as f64) / end.sub(start).as_secs_f64();
+        } else if bytes >= ONE_KB {
+            let b: f64 = bytes as f64 / ONE_KB as f64;
+            let r = (b * 8 as f64) / dur;
             return format!("{:<6.2} KBytes   {:<5.1} Kbits/sec", b, r).to_string();
         } else {
-            let r = (bytes as f64 * 8 as f64) / end.sub(start).as_secs_f64();
-            return format!("{} Bytes    {:<5.1} bits/sec", bytes, r).to_string();
+            let r = (bytes as f64 * 8 as f64) / dur;
+            return format!("{:<6} Bytes    {:<5.1} bits/sec", bytes, r).to_string();
         }
     }
     pub fn server_header(&self) {
@@ -494,3 +688,33 @@ impl Test {
         println!("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
     }
 }
+
+// impl Serialize for Test {
+//     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+//     where
+//         S: Serializer,
+//     {
+//         // 3 is the number of fields in the struct.
+//         let mut state = serializer.serialize_struct("Test", 1)?;
+//         state.serialize_field("streams", serde_json::to_string(&self.streams).unwrap().as_bytes())?;
+//         // state.serialize_field("g", &self.g)?;
+//         // state.serialize_field("b", &self.b)?;
+//         state.end()
+//     }
+// }
+/*
+state: TestState,
+verbose: bool,
+pub debug: bool,
+skip_tls: bool,
+pub cookie: String,
+pub cookie_count: u8,
+settings: Settings,
+idle_timeout_in_secs: Option<Duration>,
+reset_counter: u16,
+pub streams: Vec<PerfStream>,
+pub tokens: Vec<Token>,
+pub start: Instant,
+pub total_bytes: u64,
+pub total_blks: u64,
+*/

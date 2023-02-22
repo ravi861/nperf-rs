@@ -1,9 +1,10 @@
 use crate::params::PerfParams;
 use crate::quic::{self, Quic};
-use crate::test::{Conn, PerfStream, Stream, Test, TestState, ONE_SEC};
+use crate::test::{Conn, PerfStream, Stream, StreamMode, Test, TestState, ONE_SEC};
 use mio::net::{TcpStream, UdpSocket};
 use mio::{Events, Interest, Poll, Token, Waker};
 use std::net::SocketAddr;
+use std::ops::Sub;
 use std::time::{Duration, Instant};
 use std::{io, thread};
 
@@ -25,6 +26,7 @@ impl ClientImpl {
         let ctrl = crate::tcp::connect(addr).await?;
         set_nodelay(&ctrl);
         set_linger(&ctrl);
+        set_nonblocking(&ctrl, false);
         println!("Control Connection MSS: {}", mss(&ctrl));
 
         Ok(ClientImpl {
@@ -42,6 +44,9 @@ impl ClientImpl {
         )?;
         let waker = Waker::new(poll.registry(), CONTROL)?;
         let mut events = Events::with_capacity(1024);
+
+        // todo
+        test.mode = StreamMode::SENDER;
 
         loop {
             poll.poll(&mut events, Some(Duration::from_millis(100)))?;
@@ -61,7 +66,6 @@ impl ClientImpl {
                             test.transition(TestState::Wait);
                         }
                         TestState::CreateStreams => {
-                            // connect to the server listener
                             for _ in 0..test.num_streams() {
                                 thread::sleep(Duration::from_millis(10));
                                 match test.conn() {
@@ -71,27 +75,18 @@ impl ClientImpl {
                                         stream.connect(self.server_addr).unwrap();
                                         stream.send("hello".as_bytes())?;
                                         stream.print_new_stream();
-                                        test.streams.push(PerfStream::new(
-                                            stream,
-                                            crate::test::StreamMode::SENDER,
-                                        ));
+                                        test.streams.push(PerfStream::new(stream, test.mode()));
                                     }
                                     Conn::TCP => {
                                         let stream = crate::tcp::connect(self.server_addr).await?;
                                         stream.print_new_stream();
-                                        test.streams.push(PerfStream::new(
-                                            stream,
-                                            crate::test::StreamMode::SENDER,
-                                        ));
+                                        test.streams.push(PerfStream::new(stream, test.mode()));
                                     }
                                     Conn::QUIC => {
                                         let stream =
                                             quic::client(self.server_addr, test.skip_tls()).await;
                                         stream.print_new_stream();
-                                        test.streams.push(PerfStream::new(
-                                            stream,
-                                            crate::test::StreamMode::SENDER,
-                                        ));
+                                        test.streams.push(PerfStream::new(stream, test.mode()));
                                     }
                                 }
                             }
@@ -138,24 +133,34 @@ impl ClientImpl {
                         TestState::TestRunning => {
                             if self.running {
                                 // this state for this token can only be hit if the server is shutdown unplanned
-                                for pstream in &mut test.streams {
-                                    if pstream.curr_bytes > 0 {
-                                        pstream.push_stat(test.debug);
-                                    }
-                                }
+                                test.end(&mut poll);
                                 test.print_stats();
                                 return Ok(());
                             } else {
-                                for pstream in &mut test.streams {
-                                    pstream.stream.register(&mut poll, STREAM);
-                                    pstream.curr_time = Instant::now();
-                                }
                                 self.running = true;
                                 test.client_header();
-                                test.start = Instant::now();
+                                for pstream in &mut test.streams {
+                                    pstream.stream.register(&mut poll, STREAM);
+                                }
+                                test.start();
                             }
                         }
-                        TestState::TestEnd => {
+                        TestState::ExchangeResults => {
+                            if event.is_readable() {
+                                let json = match read_socket(&self.ctrl).await {
+                                    Ok(buf) => buf,
+                                    Err(_) => continue,
+                                };
+                                if test.debug() {
+                                    println!("{}", json);
+                                }
+                                test.from_serde(json);
+                                test.transition(TestState::End);
+                                send_state(&self.ctrl, TestState::End);
+                                waker.wake()?;
+                            }
+                        }
+                        TestState::End => {
                             match test.conn() {
                                 Conn::TCP => {
                                     for pstream in &test.streams {
@@ -176,15 +181,10 @@ impl ClientImpl {
                                 _ => {}
                             }
                             self.ctrl.shutdown(std::net::Shutdown::Both)?;
-                            for pstream in &mut test.streams {
-                                if pstream.curr_bytes > 0 {
-                                    pstream.push_stat(test.debug);
-                                }
-                            }
                             test.print_stats();
                             return Ok(());
                         }
-                        TestState::Wait => {
+                        TestState::TestEnd | TestState::Wait => {
                             if event.is_readable() {
                                 let buf = read_socket(&self.ctrl).await?;
                                 let state = TestState::from_i8(buf.as_bytes()[0] as i8);
@@ -218,8 +218,8 @@ impl ClientImpl {
                                 while try_later == false {
                                     for pstream in &mut test.streams {
                                         if test_bitrate != 0 {
-                                            let rate = (pstream.curr_bytes * 8) as f64
-                                                / pstream.curr_time.elapsed().as_secs_f64();
+                                            let rate = (pstream.temp.bytes * 8) as f64
+                                                / pstream.timers.curr.elapsed().as_secs_f64();
                                             if rate as u64 > test_bitrate {
                                                 continue;
                                                 // } else {
@@ -248,8 +248,8 @@ impl ClientImpl {
                                                 test.total_bytes += n as u64;
                                                 pstream.blks += 1;
                                                 test.total_blks += 1;
-                                                pstream.curr_bytes += n as u64;
-                                                pstream.curr_blks += 1;
+                                                pstream.temp.bytes += n as u64;
+                                                pstream.temp.blks += 1;
                                             }
                                             Err(_e) => {
                                                 //println!("Is there error");
@@ -259,14 +259,14 @@ impl ClientImpl {
                                         }
                                         if (test_blks != 0) && (test.total_blks >= test_blks)
                                             || (test_bytes != 0) && (test.total_bytes >= test_bytes)
-                                            || pstream.curr_time.elapsed() > ONE_SEC
+                                            || pstream.timers.curr.elapsed() > ONE_SEC
                                         {
                                             pstream.push_stat(test.debug);
-                                            pstream.curr_time = Instant::now();
-                                            pstream.curr_bytes = 0;
-                                            pstream.curr_blks = 0;
-                                            pstream.curr_iter += 1;
-                                            if test.start.elapsed() > test_time {
+                                            pstream.timers.curr = Instant::now();
+                                            pstream.temp.bytes = 0;
+                                            pstream.temp.blks = 0;
+                                            pstream.temp.iter += 1;
+                                            if test.timers.start.elapsed() > test_time {
                                                 try_later = true;
                                             }
                                             match conn {
@@ -278,14 +278,12 @@ impl ClientImpl {
                                 }
                                 if (test_blks != 0) && (test.total_blks >= test_blks)
                                     || (test_bytes != 0) && (test.total_bytes >= test_bytes)
-                                    || (test.start.elapsed() > test_time)
+                                    || (test.timers.start.elapsed() > test_time)
                                 {
-                                    test.transition(TestState::TestEnd);
+                                    test.end(&mut poll);
+                                    test.transition(TestState::ExchangeResults);
                                     send_state(&self.ctrl, TestState::TestEnd);
-                                    for pstream in &mut test.streams {
-                                        pstream.stream.deregister(&mut poll);
-                                    }
-                                    waker.wake()?;
+                                    // waker.wake()?;
                                 }
                             }
                         }

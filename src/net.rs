@@ -36,7 +36,7 @@ pub async fn read_socket(mut stream: &TcpStream) -> io::Result<String> {
     let mut buf = [0; 128 * 1024];
     match stream.read(&mut buf) {
         Ok(0) => {
-            println!("Zero bytes read");
+            // println!("Zero bytes read");
             return Err(Error::last_os_error());
         }
         Ok(n) => {
@@ -44,7 +44,7 @@ pub async fn read_socket(mut stream: &TcpStream) -> io::Result<String> {
             return Ok(data);
         }
         Err(e) => {
-            println!("Some error {}", e);
+            // println!("Some error {}", e);
             return Err(e.into());
         }
     }
@@ -72,6 +72,7 @@ void make_cookie(const char *cookie) {
     out[pos] = '\0';
   }
 
+*/
 pub fn set_nonblocking(stream: &TcpStream, nonblocking: bool) {
     let sck = SockRef::from(stream);
     match sck.set_nonblocking(nonblocking) {
@@ -82,7 +83,6 @@ pub fn set_nonblocking(stream: &TcpStream, nonblocking: bool) {
         }
     }
 }
-*/
 
 pub fn set_nodelay<T: Stream + AsRawFd + 'static>(stream: &T) {
     let sck = SockRef::from(stream);

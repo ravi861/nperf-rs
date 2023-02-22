@@ -1,6 +1,6 @@
 use crate::params::PerfParams;
 use crate::quic::{self, Quic};
-use crate::test::{Conn, PerfStream, Stream, StreamMode, Test, TestState, ONE_SEC};
+use crate::test::{Conn, PerfStream, Stream, Test, TestState, ONE_SEC};
 use mio::net::{TcpListener, TcpStream, UdpSocket};
 use mio::{Events, Interest, Poll, Token, Waker};
 use std::net::SocketAddr;
@@ -54,9 +54,13 @@ impl ServerImpl {
         println!("Accepted ctrl connection from {}", stream.peer_addr()?);
         set_nodelay(&stream);
         set_linger(&stream);
+        set_nonblocking(&stream, false);
         self.ctrl = Some(stream);
-        poll.registry()
-            .register(self.ctrl.as_mut().unwrap(), CONTROL, Interest::READABLE)?;
+        poll.registry().register(
+            self.ctrl.as_mut().unwrap(),
+            CONTROL,
+            Interest::READABLE | Interest::WRITABLE,
+        )?;
         let waker = Waker::new(poll.registry(), CONTROL)?;
 
         loop {
@@ -137,23 +141,36 @@ impl ServerImpl {
                         // TestStart is managed by the data connection tokens
                         TestState::TestStart => {}
                         TestState::TestRunning => {
-                            // this state for this token can only be hit if the client is shutdown unplanned
+                            // this state for this token can be hit if
+                            // the client is shutdown unplanned -> Err
+                            // and when client sends TestEnd -> Ok
                             if event.is_readable() {
                                 let ctrl_ref = self.ctrl.as_ref().unwrap();
                                 let state = match read_socket(ctrl_ref).await {
                                     Ok(buf) => TestState::from_i8(buf.as_bytes()[0] as i8),
-                                    Err(_) => TestState::TestEnd,
+                                    Err(_) => {
+                                        test.end(&mut poll);
+                                        TestState::End
+                                    }
                                 };
                                 test.transition(state);
                                 waker.wake()?;
                             }
                         }
                         TestState::TestEnd => {
-                            for pstream in &mut test.streams {
-                                if pstream.curr_bytes > 0 {
-                                    pstream.push_stat(test.debug);
-                                }
+                            test.end(&mut poll);
+                            test.transition(TestState::ExchangeResults);
+                            waker.wake()?;
+                        }
+                        TestState::ExchangeResults => {
+                            let json = test.results();
+                            if test.debug() {
+                                println!("{}", json);
                             }
+                            self.ctrl.as_mut().unwrap().write(json.as_bytes())?;
+                            test.transition(TestState::End);
+                        }
+                        TestState::End => {
                             test.print_stats();
                             return Ok(0);
                         }
@@ -238,23 +255,24 @@ impl ServerImpl {
                                     match d {
                                         Ok(0) => break,
                                         Ok(n) => {
-                                            // println!("{} bytes", n);
                                             pstream.bytes += n as u64;
-                                            pstream.curr_bytes += n as u64;
+                                            test.total_bytes += n as u64;
+                                            pstream.temp.bytes += n as u64;
                                             pstream.blks += 1;
-                                            pstream.curr_blks += 1;
-                                            pstream.curr_last_blk =
+                                            test.total_blks += 1;
+                                            pstream.temp.blks += 1;
+                                            pstream.temp.misc =
                                                 u64::from_be_bytes(buf[0..8].try_into().unwrap());
                                         }
                                         Err(_e) => break,
                                     }
-                                    if pstream.curr_time.elapsed() > ONE_SEC {
+                                    if pstream.timers.curr.elapsed() > ONE_SEC {
                                         pstream.push_stat(test.debug);
-                                        pstream.curr_time = Instant::now();
-                                        pstream.curr_bytes = 0;
-                                        pstream.curr_blks = 0;
-                                        pstream.curr_iter += 1;
-                                        pstream.prev_last_blk = pstream.curr_last_blk;
+                                        pstream.timers.curr = Instant::now();
+                                        pstream.temp.bytes = 0;
+                                        pstream.temp.blks = 0;
+                                        pstream.temp.iter += 1;
+                                        pstream.prev_last_blk = pstream.temp.misc;
                                     }
                                 }
                             }
@@ -283,8 +301,6 @@ impl ServerImpl {
                                             }
                                             count += 1;
                                         }
-                                        pstream.curr_time = Instant::now();
-                                        test.start = Instant::now();
                                     }
                                     _ => {
                                         let pstream = &mut test.streams[token.0];
@@ -293,15 +309,13 @@ impl ServerImpl {
                                         if test.debug {
                                             println!("Cookie: {:?}", n);
                                         }
-                                        // keep this here for most recent start time of actual data
-                                        pstream.curr_time = Instant::now();
-                                        test.start = Instant::now();
                                     }
                                 }
                                 test.cookie_count += 1;
                                 if test.num_streams() == test.cookie_count {
                                     test.transition(TestState::TestRunning);
                                     send_state(self.ctrl.as_ref().unwrap(), TestState::TestRunning);
+                                    test.start();
                                 }
                             }
                         }
@@ -330,8 +344,7 @@ impl ServerImpl {
             .unwrap();
 
         stream.print_new_stream();
-        test.streams
-            .push(PerfStream::new(stream, StreamMode::RECEIVER));
+        test.streams.push(PerfStream::new(stream, test.mode()));
 
         // no need of a new listener (unlike udp and quic)
         Ok(())
@@ -349,10 +362,8 @@ impl ServerImpl {
             .unwrap();
 
         self.u.as_ref().unwrap().print_new_stream();
-        test.streams.push(PerfStream::new(
-            self.u.take().unwrap(),
-            StreamMode::RECEIVER,
-        ));
+        test.streams
+            .push(PerfStream::new(self.u.take().unwrap(), test.mode()));
 
         // recreate a new udp socket to wait for new streams
         if test.streams.len() < test.num_streams() as usize {
@@ -380,10 +391,8 @@ impl ServerImpl {
             .unwrap();
 
         self.q.as_ref().unwrap().print_new_stream();
-        test.streams.push(PerfStream::new(
-            self.q.take().unwrap(),
-            StreamMode::RECEIVER,
-        ));
+        test.streams
+            .push(PerfStream::new(self.q.take().unwrap(), test.mode()));
 
         // recreate a new quic connection to wait for new streams
         if test.streams.len() < test.num_streams() as usize {
