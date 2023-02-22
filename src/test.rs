@@ -1,6 +1,6 @@
 use crate::params::PerfParams;
 use mio::{Poll, Token};
-use serde::{ser::SerializeStruct, Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use serde_json;
 use std::{
     any::Any,

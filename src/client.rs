@@ -4,7 +4,6 @@ use crate::test::{Conn, PerfStream, Stream, StreamMode, Test, TestState, ONE_SEC
 use mio::net::{TcpStream, UdpSocket};
 use mio::{Events, Interest, Poll, Token, Waker};
 use std::net::SocketAddr;
-use std::ops::Sub;
 use std::time::{Duration, Instant};
 use std::{io, thread};
 
@@ -161,25 +160,6 @@ impl ClientImpl {
                             }
                         }
                         TestState::End => {
-                            match test.conn() {
-                                Conn::TCP => {
-                                    for pstream in &test.streams {
-                                        let x: &TcpStream = (&pstream.stream).into();
-                                        x.shutdown(std::net::Shutdown::Both)?;
-                                    }
-                                }
-                                Conn::QUIC => {
-                                    for pstream in &mut test.streams {
-                                        let q: &mut Quic = (&mut pstream.stream).into();
-                                        for stream in &mut q.send_streams {
-                                            // println!("{:?}", stream);
-                                            stream.finish().await.unwrap();
-                                        }
-                                        // println!("{:?}", q.conn.as_ref().unwrap().stats());
-                                    }
-                                }
-                                _ => {}
-                            }
                             self.ctrl.shutdown(std::net::Shutdown::Both)?;
                             test.print_stats();
                             return Ok(());
@@ -191,10 +171,6 @@ impl ClientImpl {
                                 test.transition(state);
                                 waker.wake()?;
                             }
-                        }
-                        _ => {
-                            println!("Unexpected state {:?} for token {:?}", test.state(), event);
-                            break;
                         }
                     },
                     STREAM => match test.state() {
@@ -246,9 +222,9 @@ impl ClientImpl {
                                             Ok(n) => {
                                                 pstream.bytes += n as u64;
                                                 test.total_bytes += n as u64;
+                                                pstream.temp.bytes += n as u64;
                                                 pstream.blks += 1;
                                                 test.total_blks += 1;
-                                                pstream.temp.bytes += n as u64;
                                                 pstream.temp.blks += 1;
                                             }
                                             Err(_e) => {
@@ -280,6 +256,24 @@ impl ClientImpl {
                                     || (test_bytes != 0) && (test.total_bytes >= test_bytes)
                                     || (test.timers.start.elapsed() > test_time)
                                 {
+                                    match test.conn() {
+                                        Conn::TCP => {
+                                            for pstream in &test.streams {
+                                                let x: &TcpStream = (&pstream.stream).into();
+                                                x.shutdown(std::net::Shutdown::Both)?;
+                                            }
+                                        }
+                                        Conn::QUIC => {
+                                            for pstream in &mut test.streams {
+                                                let q: &mut Quic = (&mut pstream.stream).into();
+                                                for stream in &mut q.send_streams {
+                                                    // println!("{:?}", stream);
+                                                    stream.finish().await.unwrap();
+                                                }
+                                            }
+                                        }
+                                        _ => {}
+                                    }
                                     test.end(&mut poll);
                                     test.transition(TestState::ExchangeResults);
                                     send_state(&self.ctrl, TestState::TestEnd);

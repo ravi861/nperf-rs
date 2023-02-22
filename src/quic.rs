@@ -4,6 +4,7 @@ use std::io::{self, Error};
 use std::net::{SocketAddr, UdpSocket};
 use std::os::unix::prelude::{AsRawFd, RawFd};
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::net::*;
 use crate::noprotection::{NoProtectionClientConfig, NoProtectionServerConfig};
@@ -153,6 +154,7 @@ pub fn server(addr: SocketAddr, skip_tls: bool) -> Quic {
 
     let mut transport = quinn::TransportConfig::default();
     transport.initial_max_udp_payload_size(1200);
+    transport.max_idle_timeout(Some(Duration::from_secs(1).try_into().unwrap()));
 
     let mut server_config = if skip_tls {
         quinn::ServerConfig::with_crypto(Arc::new(NoProtectionServerConfig::new(Arc::new(crypto))))
@@ -196,6 +198,7 @@ pub async fn client(addr: SocketAddr, skip_tls: bool) -> Quic {
 
     let mut transport = quinn::TransportConfig::default();
     transport.initial_max_udp_payload_size(1200);
+    transport.max_idle_timeout(Some(Duration::from_secs(1).try_into().unwrap()));
 
     let mut cfg = if skip_tls {
         quinn::ClientConfig::new(Arc::new(NoProtectionClientConfig::new(Arc::new(crypto))))
