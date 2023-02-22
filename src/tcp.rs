@@ -73,7 +73,7 @@ impl<'a> From<&'a mut Box<dyn Stream>> for &'a mut TcpStream {
     }
 }
 
-pub async fn connect(addr: std::net::SocketAddr) -> io::Result<TcpStream> {
+pub fn connect(addr: std::net::SocketAddr) -> io::Result<TcpStream> {
     let mut poll = Poll::new().unwrap();
     let mut events = Events::with_capacity(1024);
 

@@ -1,12 +1,12 @@
-extern crate tokio;
-use params::PerfMode;
+use futures::executor::block_on;
+use std::io;
+use std::process::exit;
 
 use crate::client::ClientImpl;
+use crate::params::PerfMode;
 use crate::server::ServerImpl;
 use crate::test::Test;
 
-use std::io;
-use std::process::exit;
 mod client;
 mod net;
 mod noprotection;
@@ -17,23 +17,24 @@ mod tcp;
 mod test;
 mod udp;
 
-#[tokio::main]
-async fn main() -> io::Result<()> {
+fn main() -> io::Result<()> {
     let param = params::parse_args().unwrap();
 
     match param.mode {
         PerfMode::SERVER => loop {
             let mut test = Test::from(&param);
             let mut server = ServerImpl::new(&param)?;
-            if server.run(&mut test).await? < 0 {
+            let run = server.run(&mut test);
+            if block_on(run)? < 0 {
                 exit(1);
             }
             test.reset();
         },
         PerfMode::CLIENT => {
             let test = Test::from(&param);
-            let mut client = ClientImpl::new(&param).await?;
-            client.run(test).await?;
+            let mut client = ClientImpl::new(&param)?;
+            let run = client.run(test);
+            block_on(run)?;
             exit(0);
         }
     }

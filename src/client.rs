@@ -19,10 +19,10 @@ pub struct ClientImpl {
 }
 
 impl ClientImpl {
-    pub async fn new(params: &PerfParams) -> io::Result<ClientImpl> {
+    pub fn new(params: &PerfParams) -> io::Result<ClientImpl> {
         println!("Connecting to {}", make_addr(&params.bindaddr, params.port));
         let addr = (make_addr(&params.bindaddr, params.port)).parse().unwrap();
-        let ctrl = crate::tcp::connect(addr).await?;
+        let ctrl = crate::tcp::connect(addr)?;
         set_nodelay(&ctrl);
         set_linger(&ctrl);
         set_nonblocking(&ctrl, false);
@@ -77,7 +77,7 @@ impl ClientImpl {
                                         test.streams.push(PerfStream::new(stream, test.mode()));
                                     }
                                     Conn::TCP => {
-                                        let stream = crate::tcp::connect(self.server_addr).await?;
+                                        let stream = crate::tcp::connect(self.server_addr)?;
                                         stream.print_new_stream();
                                         test.streams.push(PerfStream::new(stream, test.mode()));
                                     }

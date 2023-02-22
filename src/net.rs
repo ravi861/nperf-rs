@@ -1,4 +1,3 @@
-use chrono::Local;
 use mio::net::{TcpStream, UdpSocket};
 use socket2::{Domain, Protocol, SockRef, Socket, Type};
 
@@ -10,7 +9,8 @@ use std::os::unix::io::AsRawFd;
 use std::time::Duration;
 
 pub fn gettime() -> String {
-    return Local::now().format("%Y-%m-%d %H:%M:%S.%6f").to_string();
+    // return Local::now().format("%Y-%m-%d %H:%M:%S.%6f").to_string();
+    String::new()
 }
 
 pub fn make_addr(addr: &String, port: u16) -> String {
