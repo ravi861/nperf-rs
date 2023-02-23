@@ -11,7 +11,7 @@ use crate::noprotection::{NoProtectionClientConfig, NoProtectionServerConfig};
 use crate::test::{Conn, Stream};
 use mio::unix::SourceFd;
 use mio::{event, Interest, Poll, Registry, Token};
-use quinn::{AsyncStdRuntime, Connection, Endpoint, RecvStream, SendStream, VarInt};
+use quinn::{AsyncStdRuntime, Connection, Endpoint, RecvStream, SendStream};
 
 use bytes::Bytes;
 
@@ -183,7 +183,7 @@ pub fn server(addr: SocketAddr, skip_tls: bool) -> Quic {
 }
 
 pub async fn client(addr: SocketAddr, skip_tls: bool) -> Quic {
-    let socket = UdpSocket::bind("0.0.0.0:0".parse::<SocketAddr>().unwrap()).unwrap();
+    let socket = UdpSocket::bind("[::]:0".parse::<SocketAddr>().unwrap()).unwrap();
     let fd = socket.as_raw_fd();
     let endpoint = quinn::Endpoint::new(Default::default(), None, socket, AsyncStdRuntime).unwrap();
 
@@ -208,7 +208,7 @@ pub async fn client(addr: SocketAddr, skip_tls: bool) -> Quic {
 
     cfg.transport_config(Arc::new(transport));
     let conn = endpoint
-        .connect_with(cfg, addr, "127.0.0.1")
+        .connect_with(cfg, addr, "perf")
         .unwrap()
         .await
         .unwrap();

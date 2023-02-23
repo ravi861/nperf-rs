@@ -3,7 +3,8 @@ use crate::quic::{self, Quic};
 use crate::test::{Conn, PerfStream, Stream, StreamMode, Test, TestState, ONE_SEC};
 use mio::net::{TcpStream, UdpSocket};
 use mio::{Events, Interest, Poll, Token, Waker};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
+use std::str::FromStr;
 use std::time::Duration;
 use std::{io, thread};
 
@@ -20,8 +21,18 @@ pub struct ClientImpl {
 
 impl ClientImpl {
     pub fn new(params: &PerfParams) -> io::Result<ClientImpl> {
-        println!("Connecting to {}", make_addr(&params.bindaddr, params.port));
-        let addr = (make_addr(&params.bindaddr, params.port)).parse().unwrap();
+        let ip = match &params.client {
+            None => IpAddr::from_str("0.0.0.0").unwrap(),
+            Some(addr) => match IpAddr::from_str(&addr) {
+                Ok(addr) => addr,
+                Err(e) => {
+                    println!("{}: {}", addr, e.to_string());
+                    std::process::exit(1);
+                }
+            },
+        };
+        println!("Connecting to {}:{}", ip.to_string(), params.port);
+        let addr = SocketAddr::new(ip, params.port);
         let ctrl = crate::tcp::connect(addr)?;
         set_nodelay(&ctrl);
         set_linger(&ctrl);
@@ -70,7 +81,7 @@ impl ClientImpl {
                                 match test.conn() {
                                     Conn::UDP => {
                                         let stream =
-                                            UdpSocket::bind("0.0.0.0:0".parse().unwrap()).unwrap();
+                                            UdpSocket::bind("[::]:0".parse().unwrap()).unwrap();
                                         stream.connect(self.server_addr).unwrap();
                                         stream.send("hello".as_bytes())?;
                                         stream.print_new_stream();

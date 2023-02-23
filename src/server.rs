@@ -3,9 +3,10 @@ use crate::quic::{self, Quic};
 use crate::test::{Conn, PerfStream, Stream, Test, TestState, ONE_SEC};
 use mio::net::{TcpListener, TcpStream, UdpSocket};
 use mio::{Events, Interest, Poll, Token, Waker};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 
 use core::panic;
+use std::str::FromStr;
 
 use crate::net::*;
 
@@ -25,13 +26,19 @@ pub struct ServerImpl {
 
 impl ServerImpl {
     pub fn new(params: &PerfParams) -> std::io::Result<ServerImpl> {
+        let default = ("[::]:".to_owned() + &params.port.to_string())
+            .parse::<SocketAddr>()
+            .unwrap();
+        let addr = match &params.bindaddr {
+            None => default,
+            Some(addr) => match addr.as_str() {
+                "[::]" => default,
+                _ => SocketAddr::new(IpAddr::from_str(&addr).unwrap(), params.port),
+            },
+        };
         println!("==========================================");
-        println!(
-            "Server listening on {}",
-            make_addr(&params.bindaddr, params.port)
-        );
+        println!("Server listening on {}", addr.to_string());
         println!("==========================================");
-        let addr = (make_addr(&params.bindaddr, params.port)).parse().unwrap();
         // TODO: handle failure
         let listener = TcpListener::bind(addr)?;
         Ok(ServerImpl {

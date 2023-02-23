@@ -13,10 +13,6 @@ pub fn gettime() -> String {
     String::new()
 }
 
-pub fn make_addr(addr: &String, port: u16) -> String {
-    String::from(addr) + ":" + &port.to_string()
-}
-
 pub fn write_socket(mut stream: &TcpStream, buf: &[u8]) -> io::Result<usize> {
     match stream.write(buf) {
         Ok(n) => {

@@ -1,7 +1,7 @@
 use std::{fmt::Display, io};
 
 extern crate argparse;
-use argparse::{ArgumentParser, Store, StoreTrue};
+use argparse::{ArgumentParser, Store, StoreOption, StoreTrue};
 
 use crate::test::DEFAULT_SESSION_TIMEOUT;
 
@@ -56,11 +56,12 @@ impl Display for PerfMode {
 
 pub struct PerfParams {
     pub mode: PerfMode,
+    pub client: Option<String>,
     pub udp: bool,
     pub quic: bool,
     pub verbose: bool,
     pub debug: bool,
-    pub bindaddr: String,
+    pub bindaddr: Option<String>,
     pub port: u16,
     pub dev: String,
     pub recv_timeout: u32,
@@ -79,12 +80,12 @@ pub struct PerfParams {
 
 pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
     let mut server = false;
-    let mut client = false;
+    let mut client: Option<String> = None;
     let mut port: u16 = 8080;
     let mut udp: bool = false;
     let mut quic: bool = false;
     let mut dev: String = String::new();
-    let mut bindaddr: String = String::from("127.0.0.1");
+    let mut bindaddr: Option<String> = None;
     let mut recv_timeout: u32 = DEFAULT_SESSION_TIMEOUT;
     let mut idle_timeout: u32 = 0;
     let mut num_streams: u8 = 1;
@@ -109,8 +110,8 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
         );
         args.refer(&mut client).add_option(
             &["-c", "--client"],
-            StoreTrue,
-            "[c] Start perf as client",
+            StoreOption,
+            "<host> [c] Start perf as client, connecting to <host>, default 0.0.0.0",
         );
         args.refer(&mut port)
             .add_option(&["-p", "--port"], Store, "[sc] Port server listens on");
@@ -120,8 +121,8 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
             .add_option(&["-q", "--quic"], StoreTrue, "[c] Use QUIC");
         args.refer(&mut bindaddr).add_option(
             &["-B", "--bind-addr"],
-            Store,
-            "[s] Bind address to listen on",
+            StoreOption,
+            "[s] Bind address to listen on, default [::]",
         );
         args.refer(&mut dev)
             .add_option(&["--bind-dev"], Store, "[s] Bind to device");
@@ -197,21 +198,20 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
         );
         args.parse_args_or_exit();
     }
-    if server && client {
-        return Err(io::ErrorKind::InvalidInput);
+    if server && client != None {
+        println!("Invalid input, cannot be both server and client");
+        std::process::exit(1);
     }
-    let mut mode: PerfMode = PerfMode::SERVER;
-    if client {
-        mode = PerfMode::CLIENT;
-    }
-    if server {
-        mode = PerfMode::SERVER;
-    }
+    let mode = match server {
+        true => PerfMode::SERVER,
+        false => PerfMode::CLIENT,
+    };
     // println!("{}", getrate_in_bits(&bitrate));
     let bitrate = getrate_in_bits(&bitrate);
     let bytes = getrate_in_bits(&bytes);
     let params = PerfParams {
         mode,
+        client,
         udp,
         quic,
         verbose,
