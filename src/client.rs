@@ -4,7 +4,7 @@ use crate::test::{Conn, PerfStream, Stream, StreamMode, Test, TestState, ONE_SEC
 use mio::net::{TcpStream, UdpSocket};
 use mio::{Events, Interest, Poll, Token, Waker};
 use std::net::SocketAddr;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::{io, thread};
 
 use crate::net::*;
@@ -209,7 +209,7 @@ impl ClientImpl {
                                             Conn::TCP => pstream.write(&TCP_BUF[..len]),
                                             Conn::UDP => {
                                                 udp_buf[0..8].copy_from_slice(
-                                                    &(pstream.blks + 1).to_be_bytes(),
+                                                    &(pstream.data.blks + 1).to_be_bytes(),
                                                 );
                                                 pstream.write(&udp_buf[..len])
                                             }
@@ -220,11 +220,11 @@ impl ClientImpl {
                                         };
                                         match d {
                                             Ok(n) => {
-                                                pstream.bytes += n as u64;
-                                                test.total_bytes += n as u64;
+                                                pstream.data.bytes += n as u64;
+                                                test.data.bytes += n as u64;
                                                 pstream.temp.bytes += n as u64;
-                                                pstream.blks += 1;
-                                                test.total_blks += 1;
+                                                pstream.data.blks += 1;
+                                                test.data.blks += 1;
                                                 pstream.temp.blks += 1;
                                             }
                                             Err(_e) => {
@@ -233,15 +233,11 @@ impl ClientImpl {
                                                 break;
                                             }
                                         }
-                                        if (test_blks != 0) && (test.total_blks >= test_blks)
-                                            || (test_bytes != 0) && (test.total_bytes >= test_bytes)
+                                        if (test_blks != 0) && (test.data.blks >= test_blks)
+                                            || (test_bytes != 0) && (test.data.bytes >= test_bytes)
                                             || pstream.timers.curr.elapsed() > ONE_SEC
                                         {
                                             pstream.push_stat(test.debug);
-                                            pstream.timers.curr = Instant::now();
-                                            pstream.temp.bytes = 0;
-                                            pstream.temp.blks = 0;
-                                            pstream.temp.iter += 1;
                                             if test.timers.start.elapsed() > test_time {
                                                 try_later = true;
                                             }
@@ -252,8 +248,8 @@ impl ClientImpl {
                                         }
                                     }
                                 }
-                                if (test_blks != 0) && (test.total_blks >= test_blks)
-                                    || (test_bytes != 0) && (test.total_bytes >= test_bytes)
+                                if (test_blks != 0) && (test.data.blks >= test_blks)
+                                    || (test_bytes != 0) && (test.data.bytes >= test_bytes)
                                     || (test.timers.start.elapsed() > test_time)
                                 {
                                     match test.conn() {

@@ -138,34 +138,33 @@ impl Default for Timers {
 
 #[derive(Serialize, Deserialize)]
 pub struct StreamData {
-    pub iter: u64,
     pub bytes: u64,
     pub blks: u64,
-    // misc could be anything
-    pub misc: u64,
+    pub lost: u64,
 }
 impl Default for StreamData {
     fn default() -> Self {
         StreamData {
-            iter: 0,
             bytes: 0,
             blks: 0,
-            misc: 0,
+            lost: 0,
         }
     }
 }
 
-pub struct Statistics {
+// Per second statistics
+pub struct IntervalStats {
+    pub iter: u64,
     timers: Timers,
     data: StreamData,
 }
 
-impl Display for Statistics {
+impl Display for IntervalStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "{:>4}s  {}",
-            self.data.iter,
+            self.iter,
             Test::kmg(
                 self.data.bytes,
                 self.timers.end.sub(self.timers.start).as_secs_f64()
@@ -182,25 +181,27 @@ pub struct PerfStream {
     #[serde(skip)]
     pub timers: Timers,
     pub elapsed: f64,
-    pub bytes: u64,
-    pub blks: u64,
+    pub data: StreamData,
     #[serde(skip)]
-    pub prev_last_blk: u64,
+    pub first_recvd_in_interval: u64,
     #[serde(skip)]
-    pub stats: Vec<Statistics>,
+    pub last_recvd_in_interval: u64,
+    #[serde(skip)]
+    pub stats: Vec<IntervalStats>,
+    #[serde(skip)]
+    pub iter: u64,
     #[serde(skip)]
     pub temp: StreamData,
-    pub lost: u64,
 }
 
 impl Display for PerfStream {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let out = match self.mode {
-            StreamMode::SENDER => format!("{}", self.blks),
+            StreamMode::SENDER => format!("{}", self.data.blks),
             StreamMode::RECEIVER => match self.stream.as_ref().socket_type() {
-                Conn::UDP => format!("{}/{}", self.temp.misc - self.blks, self.blks),
-                Conn::TCP => format!("{}", self.blks),
-                Conn::QUIC => format!("{}", self.blks),
+                Conn::UDP => format!("{}/{}", self.data.lost, self.data.blks),
+                Conn::TCP => format!("{}", self.data.blks),
+                Conn::QUIC => format!("{}", self.data.blks),
             },
             StreamMode::BOTH => format!(""),
         };
@@ -209,7 +210,7 @@ impl Display for PerfStream {
             "[{:>3}] {:>4}s  {}  {}  {}",
             self.stream.fd(),
             self.elapsed as u64,
-            Test::kmg(self.bytes, self.elapsed),
+            Test::kmg(self.data.bytes, self.elapsed),
             out,
             self.mode
         )
@@ -223,32 +224,39 @@ impl PerfStream {
             stream: Box::from(stream),
             timers: Timers::default(),
             elapsed: 0.0,
-            bytes: 0,
-            blks: 0,
-            prev_last_blk: 0,
+            data: StreamData::default(),
+            first_recvd_in_interval: 0,
+            last_recvd_in_interval: 0,
             stats: Vec::new(),
+            iter: 0,
             temp: StreamData::default(),
-            lost: 0,
         }
     }
     pub fn push_stat(&mut self, debug: bool) {
-        let mut stat = Statistics {
+        let mut stat = IntervalStats {
             timers: Timers::default(),
+            iter: self.iter,
             data: StreamData {
-                iter: self.temp.iter,
                 bytes: self.temp.bytes,
                 blks: self.temp.blks,
-                misc: self.temp.misc - self.prev_last_blk,
+                lost: 0,
             },
         };
+        match self.stream.as_ref().socket_type() {
+            Conn::UDP => {
+                stat.data.lost =
+                    self.last_recvd_in_interval - self.first_recvd_in_interval - self.temp.blks;
+                self.first_recvd_in_interval = self.last_recvd_in_interval;
+            }
+            _ => {}
+        }
         stat.timers.start = self.timers.curr;
 
         let out = match self.mode {
             StreamMode::SENDER => format!("{}", stat.data.blks),
             StreamMode::RECEIVER => match self.stream.as_ref().socket_type() {
                 Conn::UDP => {
-                    self.lost += stat.data.misc - stat.data.blks;
-                    format!("{}/{}", stat.data.misc - stat.data.blks, stat.data.blks)
+                    format!("{}/{}", stat.data.lost, stat.data.blks)
                 }
                 Conn::TCP => format!("{}", stat.data.blks),
                 Conn::QUIC => format!("{}", stat.data.blks),
@@ -263,8 +271,14 @@ impl PerfStream {
                 stat.data.bytes
             )
         }
+
         self.stats.push(stat);
-        // let sum: u64 = self.stats.iter().rev().take(2).map(|s| s.bytes).sum();
+
+        // reset temp variables for next interval
+        self.iter += 1;
+        self.timers.curr = Instant::now();
+        self.temp.bytes = 0;
+        self.temp.blks = 0;
     }
     #[inline]
     pub fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
@@ -373,17 +387,11 @@ pub struct Test {
     #[serde(skip)]
     pub timers: Timers,
     pub elapsed: f64,
-    pub total_bytes: u64,
-    pub total_blks: u64,
-    pub udp_lost: u64,
+    pub data: StreamData,
     #[serde(skip)]
     peer_elapsed: f64,
     #[serde(skip)]
-    peer_total_bytes: u64,
-    #[serde(skip)]
-    peer_total_blks: u64,
-    #[serde(skip)]
-    peer_udp_lost: u64,
+    peer: StreamData,
     peer_mode: StreamMode,
 }
 
@@ -405,13 +413,9 @@ impl Test {
             tokens: Vec::new(),
             timers: Timers::default(),
             elapsed: 0.0,
-            total_bytes: 0,
-            total_blks: 0,
-            udp_lost: 0,
+            data: StreamData::default(),
             peer_elapsed: 0.0,
-            peer_total_bytes: 0,
-            peer_total_blks: 0,
-            peer_udp_lost: 0,
+            peer: StreamData::default(),
             peer_mode: StreamMode::SENDER,
         }
     }
@@ -464,9 +468,9 @@ impl Test {
         let t: Test = serde_json::from_str(&json).unwrap();
         self.peer_streams = t.streams;
         self.peer_elapsed = t.elapsed;
-        self.peer_total_bytes = t.total_bytes;
-        self.peer_total_blks = t.total_blks;
-        self.peer_udp_lost = t.udp_lost;
+        self.peer.bytes = t.data.bytes;
+        self.peer.blks = t.data.blks;
+        self.peer.lost = t.data.lost;
         self.peer_mode = t.mode;
     }
     #[inline(always)]
@@ -560,6 +564,15 @@ impl Test {
             pstream.elapsed = pstream.timers.start.elapsed().as_secs_f64();
             pstream.stream.deregister(poll);
         }
+        match self.conn() {
+            Conn::UDP => {
+                for pstream in &mut self.streams {
+                    pstream.data.lost = pstream.stats.iter().map(|s| s.data.lost).sum();
+                }
+                self.data.lost = self.streams.iter().map(|s| s.data.lost).sum();
+            }
+            _ => {}
+        }
         self.elapsed = self.timers.start.elapsed().as_secs_f64();
     }
     pub fn results(&self) -> String {
@@ -570,64 +583,69 @@ impl Test {
         for pstream in &self.streams {
             println!("{}", pstream);
             if self.debug {
-                println!("interval {} secs, {} bytes", pstream.elapsed, pstream.bytes)
+                println!(
+                    "interval {} secs, {} bytes",
+                    pstream.elapsed, pstream.data.bytes
+                )
             }
         }
         for pstream in &self.peer_streams {
             println!("{}", pstream);
             if self.debug {
-                println!("interval {} secs, {} bytes", pstream.elapsed, pstream.bytes)
+                println!(
+                    "interval {} secs, {} bytes",
+                    pstream.elapsed, pstream.data.bytes
+                )
             }
         }
         if self.streams.len() > 1 {
-            let udp_lost: u64 = self.streams.iter().map(|s| s.lost).sum();
             let out = match self.mode {
-                StreamMode::SENDER => format!("{}", self.total_blks),
+                StreamMode::SENDER => format!("{}", self.data.blks),
                 StreamMode::RECEIVER => match self.conn() {
                     Conn::UDP => {
-                        format!("{}/{}", udp_lost, self.total_blks)
+                        format!("{}/{}", self.data.lost, self.data.blks)
                     }
-                    Conn::TCP => format!("{}", self.total_blks),
-                    Conn::QUIC => format!("{}", self.total_blks),
+                    Conn::TCP => format!("{}", self.data.blks),
+                    Conn::QUIC => format!("{}", self.data.blks),
                 },
                 StreamMode::BOTH => String::new(),
             };
             println!(
                 "[Sum]  {:>3}s  {}  {}  {}",
                 self.elapsed as u64,
-                Test::kmg(self.total_bytes, self.elapsed),
+                Test::kmg(self.data.bytes, self.elapsed),
                 out,
                 self.mode,
             );
             if self.debug {
-                println!("interval {} secs, {} bytes", self.elapsed, self.total_bytes);
+                println!("interval {} secs, {} bytes", self.elapsed, self.data.bytes);
             }
             if self.mode == StreamMode::RECEIVER {
                 println!("");
                 return;
             }
             let out = match self.peer_mode {
-                StreamMode::SENDER => format!("{}", self.peer_total_blks),
+                StreamMode::SENDER => format!("{}", self.peer.blks),
                 StreamMode::RECEIVER => match self.conn() {
                     Conn::UDP => {
-                        format!("{}/{}", self.peer_udp_lost, self.peer_total_blks)
+                        format!("{}/{}", self.peer.lost, self.peer.blks)
                     }
-                    Conn::TCP => format!("{}", self.peer_total_blks),
-                    Conn::QUIC => format!("{}", self.peer_total_blks),
+                    Conn::TCP => format!("{}", self.peer.blks),
+                    Conn::QUIC => format!("{}", self.peer.blks),
                 },
                 StreamMode::BOTH => String::new(),
             };
             println!(
                 "[Sum]  {:>3}s  {}  {}  {}",
                 self.peer_elapsed as u64,
-                Test::kmg(self.peer_total_bytes, self.peer_elapsed),
+                Test::kmg(self.peer.bytes, self.peer_elapsed),
                 out,
                 self.peer_mode,
             );
             if self.debug {
                 println!(
                     "interval {} secs, {} bytes",
-                    self.peer_elapsed, self.peer_total_bytes
+                    self.peer_elapsed, self.peer.bytes
                 );
             }
         }

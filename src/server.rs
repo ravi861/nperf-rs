@@ -4,7 +4,6 @@ use crate::test::{Conn, PerfStream, Stream, Test, TestState, ONE_SEC};
 use mio::net::{TcpListener, TcpStream, UdpSocket};
 use mio::{Events, Interest, Poll, Token, Waker};
 use std::net::SocketAddr;
-use std::time::Instant;
 
 use core::panic;
 
@@ -255,24 +254,19 @@ impl ServerImpl {
                                     match d {
                                         Ok(0) => break,
                                         Ok(n) => {
-                                            pstream.bytes += n as u64;
-                                            test.total_bytes += n as u64;
+                                            pstream.data.bytes += n as u64;
+                                            test.data.bytes += n as u64;
                                             pstream.temp.bytes += n as u64;
-                                            pstream.blks += 1;
-                                            test.total_blks += 1;
+                                            pstream.data.blks += 1;
+                                            test.data.blks += 1;
                                             pstream.temp.blks += 1;
-                                            pstream.temp.misc =
+                                            pstream.last_recvd_in_interval =
                                                 u64::from_be_bytes(buf[0..8].try_into().unwrap());
                                         }
                                         Err(_e) => break,
                                     }
                                     if pstream.timers.curr.elapsed() > ONE_SEC {
                                         pstream.push_stat(test.debug);
-                                        pstream.timers.curr = Instant::now();
-                                        pstream.temp.bytes = 0;
-                                        pstream.temp.blks = 0;
-                                        pstream.temp.iter += 1;
-                                        pstream.prev_last_blk = pstream.temp.misc;
                                     }
                                 }
                             }

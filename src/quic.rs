@@ -11,7 +11,7 @@ use crate::noprotection::{NoProtectionClientConfig, NoProtectionServerConfig};
 use crate::test::{Conn, Stream};
 use mio::unix::SourceFd;
 use mio::{event, Interest, Poll, Registry, Token};
-use quinn::{Connection, Endpoint, RecvStream, SendStream, TokioRuntime};
+use quinn::{AsyncStdRuntime, Connection, Endpoint, RecvStream, SendStream, VarInt};
 
 use bytes::Bytes;
 
@@ -169,7 +169,7 @@ pub fn server(addr: SocketAddr, skip_tls: bool) -> Quic {
         Default::default(),
         Some(server_config),
         socket,
-        TokioRuntime,
+        quinn::AsyncStdRuntime,
     )
     .unwrap();
 
@@ -185,7 +185,7 @@ pub fn server(addr: SocketAddr, skip_tls: bool) -> Quic {
 pub async fn client(addr: SocketAddr, skip_tls: bool) -> Quic {
     let socket = UdpSocket::bind("0.0.0.0:0".parse::<SocketAddr>().unwrap()).unwrap();
     let fd = socket.as_raw_fd();
-    let endpoint = quinn::Endpoint::new(Default::default(), None, socket, TokioRuntime).unwrap();
+    let endpoint = quinn::Endpoint::new(Default::default(), None, socket, AsyncStdRuntime).unwrap();
 
     let mut crypto = rustls::ClientConfig::builder()
         .with_cipher_suites(PERF_CIPHER_SUITES)
