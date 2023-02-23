@@ -136,7 +136,7 @@ pub fn mss(stream: &TcpStream) -> u32 {
 }
 
 pub fn create_net_udp_socket(addr: SocketAddr) -> std::net::UdpSocket {
-    let sck = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP)).unwrap();
+    let sck = Socket::new(Domain::for_address(addr), Type::DGRAM, Some(Protocol::UDP)).unwrap();
     sck.set_reuse_address(true).unwrap();
     sck.set_recv_buffer_size(212992).unwrap();
     sck.set_send_buffer_size(212992).unwrap();
