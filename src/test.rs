@@ -629,35 +629,33 @@ impl Test {
                 )
             }
         }
-        if self.streams.len() > 1 {
-            println!("- - - - - - - - - - - - - - - All Streams - - - - - - - - - - - - - - - -");
+        println!("- - - - - - - - - - - - - - - All Streams - - - - - - - - - - - - - - - -");
+        println!(
+            "[Sum]  {:>3}s  {}  {}  {}",
+            self.elapsed as u64,
+            Test::kmg(self.data.bytes, self.elapsed),
+            print_stat_line(&self.data, &self.mode, self.conn()),
+            self.mode,
+        );
+        if self.debug {
+            println!("interval {} secs, {} bytes", self.elapsed, self.data.bytes);
+        }
+        if self.mode == StreamMode::RECEIVER {
+            println!("");
+            return;
+        }
+        println!(
+            "[Sum]  {:>3}s  {}  {}  {}",
+            self.peer_elapsed as u64,
+            Test::kmg(self.peer.bytes, self.peer_elapsed),
+            print_stat_line(&self.peer, &self.peer_mode, self.conn()),
+            self.peer_mode,
+        );
+        if self.debug {
             println!(
-                "[Sum]  {:>3}s  {}  {}  {}",
-                self.elapsed as u64,
-                Test::kmg(self.data.bytes, self.elapsed),
-                print_stat_line(&self.data, &self.mode, self.conn()),
-                self.mode,
+                "interval {} secs, {} bytes",
+                self.peer_elapsed, self.peer.bytes
             );
-            if self.debug {
-                println!("interval {} secs, {} bytes", self.elapsed, self.data.bytes);
-            }
-            if self.mode == StreamMode::RECEIVER {
-                println!("");
-                return;
-            }
-            println!(
-                "[Sum]  {:>3}s  {}  {}  {}",
-                self.peer_elapsed as u64,
-                Test::kmg(self.peer.bytes, self.peer_elapsed),
-                print_stat_line(&self.peer, &self.peer_mode, self.conn()),
-                self.peer_mode,
-            );
-            if self.debug {
-                println!(
-                    "interval {} secs, {} bytes",
-                    self.peer_elapsed, self.peer.bytes
-                );
-            }
         }
         println!("");
     }

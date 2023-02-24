@@ -11,17 +11,17 @@ rustls = { version = "0.20", default-features = false, features = ["dangerous_co
 rustls-pemfile = "1.0.0"
 rcgen = "0.10.0"
 bytes = "1"
-mio = {  version="0.8.5", features=["net"] }
+mio = {  version="0.8.6", features=["net"] }
 quinn = { version= "0.9.3", features=["runtime-async-std"] }
 quinn-proto = "0.9.2"
-serde = { version="1.0.152", features=["derive"] }
-serde_json = "1.0.91"
+serde = { version="1.0.152", default-features = false, features=["derive"] }
+serde_json = "1.0.93"
 socket2 = "0.4.7"
 #libc = "0.2.139"
-futures = "0.3"
+futures = { version = "0.3", default-features = false, features = ["executor"] }
 
-#[profile.release]
-#strip = true
+[profile.release]
+strip = true
 #codegen-units = 1
 #lto = true
 #opt-level = "z"
