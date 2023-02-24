@@ -84,25 +84,25 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
     let mut port: u16 = 8080;
     let mut udp: bool = false;
     let mut quic: bool = false;
-    let mut dev: String = String::new();
+    let dev: String = String::new();
     let mut bindaddr: Option<String> = None;
-    let mut recv_timeout: u32 = DEFAULT_SESSION_TIMEOUT;
-    let mut idle_timeout: u32 = 0;
+    let recv_timeout: u32 = DEFAULT_SESSION_TIMEOUT;
+    let idle_timeout: u32 = 0;
     let mut num_streams: u8 = 1;
-    let mut mss: u32 = 0;
+    let mss: u32 = 0;
     let mut bitrate: String = String::from("abcdef");
     let mut time: u64 = 10;
     let mut bytes: String = String::from("abcdef");
     let mut blks: u64 = 0;
     let mut length: u32 = 0;
-    let mut sendbuf: u32 = 0;
-    let mut recvbuf: u32 = 0;
+    let sendbuf: u32 = 0;
+    let recvbuf: u32 = 0;
     let mut skip_tls: bool = false;
     let mut verbose = false;
     let mut debug = false;
     {
         let mut args = ArgumentParser::new();
-        args.set_description("[s] server only, [c] client only, [sc] both, [KMG] option supports a K/M/G suffix for kilo-, mega-, or giga-");
+        args.set_description("[s] server only, [c] client only, [sc] both, \n[KMG] option supports a K/M/G suffix for kilo-, mega-, or giga-");
         args.refer(&mut server).add_option(
             &["-s", "--server"],
             StoreTrue,
@@ -111,10 +111,13 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
         args.refer(&mut client).add_option(
             &["-c", "--client"],
             StoreOption,
-            "<host> [c] Start perf as client, connecting to <host>, default 0.0.0.0",
+            "[c] Start perf as client, connecting to <host>, (default 127.0.0.1)",
         );
-        args.refer(&mut port)
-            .add_option(&["-p", "--port"], Store, "[sc] Port server listens on");
+        args.refer(&mut port).add_option(
+            &["-p", "--port"],
+            Store,
+            "[sc] Port server listens on / client connects to, (default 8080)",
+        );
         args.refer(&mut udp)
             .add_option(&["-u", "--udp"], StoreTrue, "[c] Use UDP");
         args.refer(&mut quic)
@@ -122,24 +125,24 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
         args.refer(&mut bindaddr).add_option(
             &["-B", "--bind-addr"],
             StoreOption,
-            "[s] Bind address to listen on, default [::]",
+            "[s] Bind address to listen on, (default [::])",
         );
-        args.refer(&mut dev)
-            .add_option(&["--bind-dev"], Store, "[s] Bind to device");
-        args.refer(&mut recv_timeout).add_option(
-            &["--recv-timeout"],
-            Store,
-            "[sc] idle timeout for receiving data (default 120s)",
-        );
-        args.refer(&mut idle_timeout).add_option(
-            &["--idle-timeout"],
-            Store,
-            "[s] restart idle server after # seconds in case it got stuck (default - no timeout)",
-        );
+        // args.refer(&mut dev)
+        //     .add_option(&["--bind-dev"], Store, "[s] Bind to device");
+        // args.refer(&mut recv_timeout).add_option(
+        //     &["--recv-timeout"],
+        //     Store,
+        //     "[sc] idle timeout for receiving data (default 120s)",
+        // );
+        // args.refer(&mut idle_timeout).add_option(
+        //     &["--idle-timeout"],
+        //     Store,
+        //     "[s] restart idle server after # seconds in case it got stuck (default - no timeout)",
+        // );
         args.refer(&mut bitrate).add_option(
             &["-b", "--bitrate"],
             Store,
-            "[c] [KMG] target bitrate in bits/sec (0 for unlimited), (default 1 Mbit/sec for UDP, unlimited for TCP/QUIC)",
+            "[c] [KMG] target bitrate in bits/sec, (default unlimited)",
         );
         args.refer(&mut time).add_option(
             &["-t", "--time"],
@@ -159,28 +162,28 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
         args.refer(&mut length).add_option(
             &["-l", "--length"],
             Store,
-            "[c] [KMG] length of buffer to read or write in bytes (default 128 KB for TCP, dynamic or 1460 for UDP)",
+            "[c] [KMG] length of buffer to read or write in bytes, maximum for TCP - 128KB, UDP/QUIC - 64KB (default ctrl connection MSS)",
         );
         args.refer(&mut num_streams).add_option(
             &["-P", "--parallel"],
             Store,
             "[c] number of parallel client streams to run",
         );
-        args.refer(&mut mss).add_option(
-            &["-M", "--set-mss"],
-            Store,
-            "[c] set TCP maximum segment size",
-        );
-        args.refer(&mut sendbuf).add_option(
-            &["--send-buf-size"],
-            Store,
-            "[c] set socket send buffer size [default: OS defined]",
-        );
-        args.refer(&mut recvbuf).add_option(
-            &["--recv-buf-size"],
-            Store,
-            "[c] set socket recv buffer size [default: OS defined]",
-        );
+        // args.refer(&mut mss).add_option(
+        //     &["-M", "--set-mss"],
+        //     Store,
+        //     "[c] set TCP maximum segment size",
+        // );
+        // args.refer(&mut sendbuf).add_option(
+        //     &["--send-buf-size"],
+        //     Store,
+        //     "[c] set socket send buffer size [default: OS defined]",
+        // );
+        // args.refer(&mut recvbuf).add_option(
+        //     &["--recv-buf-size"],
+        //     Store,
+        //     "[c] set socket recv buffer size [default: OS defined]",
+        // );
         args.refer(&mut skip_tls).add_option(
             &["--skip-tls"],
             StoreTrue,
