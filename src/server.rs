@@ -4,9 +4,8 @@ use crate::test::{Conn, PerfStream, Stream, Test, TestState, ONE_SEC};
 use mio::net::{TcpListener, TcpStream, UdpSocket};
 use mio::{Events, Interest, Poll, Token, Waker};
 use std::net::{IpAddr, SocketAddr};
-
-use core::panic;
 use std::str::FromStr;
+use core::panic;
 
 use crate::net::*;
 
@@ -129,8 +128,12 @@ impl ServerImpl {
                                         )?;
                                     }
                                     Conn::QUIC => {
-                                        self.q =
-                                            Some(quic::server(self.addr.into(), test.skip_tls()));
+                                        self.q = Some(quic::server(
+                                            self.addr.into(),
+                                            test.skip_tls(),
+                                            Some(String::from("cert.key")),
+                                            Some(String::from("cert.crt")),
+                                        ));
                                         poll.registry().register(
                                             self.q.as_mut().unwrap(),
                                             QUIC_LISTENER,
@@ -397,7 +400,12 @@ impl ServerImpl {
 
         // recreate a new quic connection to wait for new streams
         if test.streams.len() < test.num_streams() as usize {
-            self.q = Some(quic::server(self.addr.into(), test.skip_tls()));
+            self.q = Some(quic::server(
+                self.addr.into(),
+                test.skip_tls(),
+                Some(String::from("cert.key")),
+                Some(String::from("cert.crt")),
+            ));
             poll.registry()
                 .register(
                     self.q.as_mut().unwrap(),

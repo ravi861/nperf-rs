@@ -116,9 +116,9 @@ impl<'a> From<&'a mut Box<dyn Stream>> for &'a mut Quic {
     }
 }
 
-pub fn server(addr: SocketAddr, skip_tls: bool) -> Quic {
-    let (key, cert) = match ("cert.key", "cert.crt") {
-        (&ref key, &ref cert) => {
+pub fn server(addr: SocketAddr, skip_tls: bool, k: Option<String>, c: Option<String>) -> Quic {
+    let (key, cert) = match (&k, &c) {
+        (&Some(ref key), &Some(ref cert)) => {
             let key = fs::read(key).unwrap();
             let cert = fs::read(cert).unwrap();
 

@@ -47,13 +47,14 @@ impl ClientImpl {
     }
     pub async fn run(&mut self, mut test: Test) -> io::Result<()> {
         let mut poll = Poll::new().unwrap();
+        let mut events = Events::with_capacity(1024);
+
         poll.registry().register(
             &mut self.ctrl,
             CONTROL,
             Interest::READABLE | Interest::WRITABLE,
         )?;
         let waker = Waker::new(poll.registry(), CONTROL)?;
-        let mut events = Events::with_capacity(1024);
 
         // todo
         test.mode = StreamMode::SENDER;
