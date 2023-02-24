@@ -1,3 +1,58 @@
+// Copyright (c) 2023 Ravi V <ravi.vantipalli@gmail.com>
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+//! # netperf (np)
+//!
+//! `np` is a network performance measurement tool for TCP/UDP/QUIC protocols. Similar to iperf3 in usage.
+//!
+//! ## Differences to iperf3
+//! - QUIC is newly supported in np
+//! - Some CLI options yet to be supported in np and some are WIP
+//! - SCTP is unsupported
+//! - No support for --bidir
+//! 
+//! ## Usage
+//! More options available via help.
+//! 
+//! ### Server
+//! Binds to [::]:8080 by default
+//! ```bash
+//! cargo run -- -s
+//! ```
+//! 
+//! ### Client
+//! Connects to 127.0.0.1:8080 by default and tests TCP streams
+//! ```bash
+//! cargo run --
+//! cargo run -- -c 127.0.0.1
+//! ```
+//! 
+//! Test UDP performance
+//! ```bash
+//! cargo run -- -u
+//! ```
+//! 
+//! Test QUIC performance
+//! ```bash
+//! cargo run -- -q
+//! '''
+//! 
+//! Test with parallel streams using -P, period to test with -t
+//! ```bash
+//! cargo run -- -u -P 2 -t 30
+//! ```
+//! 
+//! ## Future
+//! - Support for TCP congestion algorithm, send/recv buffer sizes
+//! - More performance metrics like rtt, retransmits, congestion window, etc
+//! - More performance and configuration options for QUIC
+//!
+
 use futures::executor::block_on;
 use std::io;
 use std::process::exit;
@@ -7,16 +62,26 @@ use crate::params::PerfMode;
 use crate::server::ServerImpl;
 use crate::test::Test;
 
+#[doc(hidden)]
 mod client;
+#[doc(hidden)]
 mod net;
+#[doc(hidden)]
 mod noprotection;
+#[doc(hidden)]
 mod params;
+#[doc(hidden)]
 mod quic;
+#[doc(hidden)]
 mod server;
+#[doc(hidden)]
 mod tcp;
+#[doc(hidden)]
 mod test;
+#[doc(hidden)]
 mod udp;
 
+#[doc(hidden)]
 fn main() -> io::Result<()> {
     let param = params::parse_args().unwrap();
 

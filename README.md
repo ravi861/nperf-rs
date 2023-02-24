@@ -34,7 +34,6 @@ cargo run -- -q
 cargo run -- -u -P 2 -t 30
 ```
 
-
 ## Future
 - Support for TCP congestion algorithm, send/recv buffer sizes
 - More performance metrics like rtt, retransmits, congestion window, etc
