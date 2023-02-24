@@ -6,13 +6,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! # netperf (np)
+//! # nperf
 //!
-//! `np` is a network performance measurement tool for TCP/UDP/QUIC protocols. Similar to iperf3 in usage.
+//! `nperf` is a network performance measurement tool for TCP/UDP/QUIC protocols. Similar to iperf3 in usage.
 //!
 //! ## Differences to iperf3
-//! - QUIC is newly supported in np
-//! - Some CLI options yet to be supported in np and some are WIP
+//! - QUIC is newly supported in nperf
+//! - Some CLI options yet to be supported in nperf and some are WIP
 //! - SCTP is unsupported
 //! - No support for --bidir
 //! 

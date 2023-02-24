@@ -1,5 +1,5 @@
 [package]
-name = "np"
+name = "nperf"
 version = "0.1.0"
 authors = ["Ravi V"]
 edition = "2021"
@@ -7,7 +7,7 @@ description = """
 A network performance measurement tool for TCP/UCP/QUIC protocols. Similar to iperf3 in usage.
 """
 keywords = ["networking", "performance", "iperf", "quic"]
-repository = "https://github.com/ravi861/netperf-rs"
+repository = "https://github.com/ravi861/nperf-rs"
 readme = "README.md"
 license = "Apache-2.0"
 exclude = [".github", ".gitignore", "*.pcap", "*.log", "tags"]
