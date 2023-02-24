@@ -6,7 +6,7 @@ edition = "2021"
 description = """
 A network performance measurement tool for TCP/UCP/QUIC protocols. Similar to iperf3 in usage.
 """
-keywords = ["networking", "performance", "iperf3", "quic", "tcp", "udp"]
+keywords = ["networking", "performance", "iperf", "quic"]
 repository = "https://github.com/ravi861/netperf-rs"
 readme = "README.md"
 license = "Apache-2.0"
