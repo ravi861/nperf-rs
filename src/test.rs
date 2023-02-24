@@ -1,6 +1,6 @@
 use crate::params::PerfParams;
 use mio::{Poll, Token};
-use serde::{Deserialize, Serialize};
+use serde::{ser::SerializeStruct, Deserialize, Deserializer, Serialize, Serializer};
 use serde_json;
 use std::{
     any::Any,
@@ -11,7 +11,20 @@ use std::{
     time::{Duration, Instant},
 };
 
-struct Dummy {}
+// This Dummy type is just here for ExchangeResults.
+// The entire PerfStream struct is serialized and sent over to the client.
+// Box<dyn Stream> is something that cannot be easily serde'd. So instead,
+// send this Dummy across with just the relevant information to properly
+// print the results in the client.
+// The Serialize trait is manually implemented which will convert the Stream
+// to a Dummy. On the receiver end, the derive Deserialize will convert it
+// back into a Box<dyn Stream>.
+// Obviously, no other methods of the trait can be called at the receiver.
+#[derive(Deserialize)]
+struct Dummy {
+    fd: u32,
+    conn: i8,
+}
 impl Stream for Dummy {
     #[inline(always)]
     fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
@@ -22,7 +35,7 @@ impl Stream for Dummy {
         Ok(0)
     }
     fn fd(&self) -> RawFd {
-        0
+        self.fd as RawFd
     }
     fn register(&mut self, _poll: &mut Poll, _token: Token) {}
     fn deregister(&mut self, _poll: &mut Poll) {}
@@ -34,13 +47,25 @@ impl Stream for Dummy {
     }
     fn print_new_stream(&self) {}
     fn socket_type(&self) -> Conn {
-        Conn::TCP
+        Conn::from_i8(self.conn)
     }
 }
 
-impl Default for Box<dyn Stream> {
-    fn default() -> Box<(dyn Stream + 'static)> {
-        Box::new(Dummy {})
+impl Serialize for Box<dyn Stream> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("Dummy", 2)?;
+        state.serialize_field("fd", &self.fd())?;
+        state.serialize_field("conn", &(self.socket_type() as i8))?;
+        state.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for Box<dyn Stream> {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = Dummy::deserialize(d)?;
+        Ok(Box::from(s))
     }
 }
 
@@ -53,6 +78,32 @@ pub const ONE_SEC: Duration = Duration::from_secs(1);
 pub const ONE_GB: u64 = 1024 * 1024 * 1024;
 pub const ONE_MB: u64 = 1024 * 1024;
 pub const ONE_KB: u64 = 1024;
+
+#[derive(Serialize, Deserialize, Debug, Copy, Clone)]
+pub enum Conn {
+    TCP,
+    UDP,
+    QUIC,
+}
+impl Display for Conn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Conn::TCP => write!(f, "TCP"),
+            Conn::UDP => write!(f, "UDP"),
+            Conn::QUIC => write!(f, "QUIC"),
+        }
+    }
+}
+impl Conn {
+    pub fn from_i8(value: i8) -> Conn {
+        match value {
+            0 => Conn::TCP,
+            1 => Conn::UDP,
+            2 => Conn::QUIC,
+            _ => panic!("Unknown value: {}", value),
+        }
+    }
+}
 
 pub trait Stream {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize>;
@@ -78,7 +129,6 @@ pub enum TestState {
     ExchangeResults,
     End,
 }
-
 impl TestState {
     pub fn from_i8(value: i8) -> TestState {
         match value {
@@ -95,7 +145,6 @@ impl TestState {
         }
     }
 }
-
 impl Default for TestState {
     fn default() -> Self {
         TestState::Start
@@ -108,7 +157,6 @@ pub enum StreamMode {
     RECEIVER,
     BOTH,
 }
-
 impl Display for StreamMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -158,7 +206,6 @@ pub struct IntervalStats {
     timers: Timers,
     data: StreamData,
 }
-
 impl Display for IntervalStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -173,10 +220,25 @@ impl Display for IntervalStats {
     }
 }
 
+fn print_stat_line(data: &StreamData, mode: &StreamMode, conn: Conn) -> String {
+    match mode {
+        StreamMode::SENDER => format!("{:<26}", data.blks),
+        StreamMode::RECEIVER => match conn {
+            Conn::UDP => format!(
+                "{:<18}  ({:.1}%)",
+                format!("{} / {}", data.lost, data.blks),
+                (data.lost as f64 / data.blks as f64) * 100.0,
+            ),
+            Conn::TCP => format!("{:<26}", data.blks),
+            Conn::QUIC => format!("{:<26}", data.blks),
+        },
+        StreamMode::BOTH => format!(""),
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct PerfStream {
     pub mode: StreamMode,
-    #[serde(skip)]
     pub stream: Box<dyn Stream>,
     #[serde(skip)]
     pub timers: Timers,
@@ -196,22 +258,13 @@ pub struct PerfStream {
 
 impl Display for PerfStream {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let out = match self.mode {
-            StreamMode::SENDER => format!("{}", self.data.blks),
-            StreamMode::RECEIVER => match self.stream.as_ref().socket_type() {
-                Conn::UDP => format!("{}/{}", self.data.lost, self.data.blks),
-                Conn::TCP => format!("{}", self.data.blks),
-                Conn::QUIC => format!("{}", self.data.blks),
-            },
-            StreamMode::BOTH => format!(""),
-        };
         write!(
             f,
             "[{:>3}] {:>4}s  {}  {}  {}",
             self.stream.fd(),
             self.elapsed as u64,
             Test::kmg(self.data.bytes, self.elapsed),
-            out,
+            print_stat_line(&self.data, &self.mode, self.stream.as_ref().socket_type()),
             self.mode
         )
     }
@@ -252,18 +305,12 @@ impl PerfStream {
         }
         stat.timers.start = self.timers.curr;
 
-        let out = match self.mode {
-            StreamMode::SENDER => format!("{}", stat.data.blks),
-            StreamMode::RECEIVER => match self.stream.as_ref().socket_type() {
-                Conn::UDP => {
-                    format!("{}/{}", stat.data.lost, stat.data.blks)
-                }
-                Conn::TCP => format!("{}", stat.data.blks),
-                Conn::QUIC => format!("{}", stat.data.blks),
-            },
-            StreamMode::BOTH => String::new(),
-        };
-        println!("[{:>3}] {}  {}", self.stream.fd(), stat, out);
+        println!(
+            "[{:>3}] {}  {}",
+            self.stream.fd(),
+            stat,
+            print_stat_line(&stat.data, &self.mode, self.stream.as_ref().socket_type())
+        );
         if debug {
             println!(
                 "interval {} secs, {} bytes",
@@ -306,22 +353,6 @@ impl PerfStream {
                 // println!("In write {:?}", e);
                 return Err(e);
             }
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Copy, Clone)]
-pub enum Conn {
-    TCP,
-    UDP,
-    QUIC,
-}
-impl Display for Conn {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Conn::TCP => write!(f, "TCP"),
-            Conn::UDP => write!(f, "UDP"),
-            Conn::QUIC => write!(f, "QUIC"),
         }
     }
 }
@@ -579,7 +610,7 @@ impl Test {
         serde_json::to_string(&self).unwrap()
     }
     pub fn print_stats(&self) {
-        println!("- - - - - - - - - - - - - - Results - - - - - - - - - - - - - - - -");
+        println!("- - - - - - - - - - - - - Results Per Stream- - - - - - - - - - - - - - -");
         for pstream in &self.streams {
             println!("{}", pstream);
             if self.debug {
@@ -599,22 +630,12 @@ impl Test {
             }
         }
         if self.streams.len() > 1 {
-            let out = match self.mode {
-                StreamMode::SENDER => format!("{}", self.data.blks),
-                StreamMode::RECEIVER => match self.conn() {
-                    Conn::UDP => {
-                        format!("{}/{}", self.data.lost, self.data.blks)
-                    }
-                    Conn::TCP => format!("{}", self.data.blks),
-                    Conn::QUIC => format!("{}", self.data.blks),
-                },
-                StreamMode::BOTH => String::new(),
-            };
+            println!("- - - - - - - - - - - - - - - All Streams - - - - - - - - - - - - - - - -");
             println!(
                 "[Sum]  {:>3}s  {}  {}  {}",
                 self.elapsed as u64,
                 Test::kmg(self.data.bytes, self.elapsed),
-                out,
+                print_stat_line(&self.data, &self.mode, self.conn()),
                 self.mode,
             );
             if self.debug {
@@ -624,22 +645,11 @@ impl Test {
                 println!("");
                 return;
             }
-            let out = match self.peer_mode {
-                StreamMode::SENDER => format!("{}", self.peer.blks),
-                StreamMode::RECEIVER => match self.conn() {
-                    Conn::UDP => {
-                        format!("{}/{}", self.peer.lost, self.peer.blks)
-                    }
-                    Conn::TCP => format!("{}", self.peer.blks),
-                    Conn::QUIC => format!("{}", self.peer.blks),
-                },
-                StreamMode::BOTH => String::new(),
-            };
             println!(
                 "[Sum]  {:>3}s  {}  {}  {}",
                 self.peer_elapsed as u64,
                 Test::kmg(self.peer.bytes, self.peer_elapsed),
-                out,
+                print_stat_line(&self.peer, &self.peer_mode, self.conn()),
                 self.peer_mode,
             );
             if self.debug {
@@ -658,15 +668,24 @@ impl Test {
             return format!("{:<6.2} GBytes   {:<5.1} Gbits/sec", b, r).to_string();
         } else if bytes >= ONE_MB {
             let b: f64 = bytes as f64 / ONE_MB as f64;
-            let r = (b * 8 as f64) / dur;
+            let mut r = (b * 8 as f64) / dur;
+            if dur < 1.0 {
+                r = 0.0;
+            }
             return format!("{:<6.2} MBytes   {:<5.1} Mbits/sec", b, r).to_string();
         } else if bytes >= ONE_KB {
             let b: f64 = bytes as f64 / ONE_KB as f64;
-            let r = (b * 8 as f64) / dur;
+            let mut r = (b * 8 as f64) / dur;
+            if dur < 1.0 {
+                r = 0.0;
+            }
             return format!("{:<6.2} KBytes   {:<5.1} Kbits/sec", b, r).to_string();
         } else {
-            let r = (bytes as f64 * 8 as f64) / dur;
-            return format!("{:<6} Bytes    {:<5.1} bits/sec", bytes, r).to_string();
+            let mut r = (bytes as f64 * 8 as f64) / dur;
+            if dur < 1.0 {
+                r = 0.0;
+            }
+            return format!("{:<6} Bytes    {:<6.1} bits/sec", bytes, r).to_string();
         }
     }
     pub fn server_header(&self) {
@@ -675,7 +694,7 @@ impl Test {
             self.conn(),
             self.num_streams()
         );
-        println!("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
+        println!("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
         match self.conn() {
             Conn::UDP => {
                 println!("[ FD]  Time  Transfer        Rate             Lost/Total Datagrams")
@@ -685,7 +704,7 @@ impl Test {
                 println!("[ FD]  Time  Transfer        Rate              Total Datagrams")
             }
         }
-        println!("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
+        println!("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
     }
     pub fn client_header(&self) {
         println!(
@@ -693,7 +712,7 @@ impl Test {
             self.conn(),
             self.num_streams()
         );
-        println!("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
+        println!("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
         match self.conn() {
             Conn::UDP => {
                 println!("[ FD]  Time  Transfer        Rate             Total Datagrams")
@@ -703,36 +722,6 @@ impl Test {
                 println!("[ FD]  Time  Transfer        Rate              Total Datagrams")
             }
         }
-        println!("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
+        println!("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
     }
 }
-
-// impl Serialize for Test {
-//     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-//     where
-//         S: Serializer,
-//     {
-//         // 3 is the number of fields in the struct.
-//         let mut state = serializer.serialize_struct("Test", 1)?;
-//         state.serialize_field("streams", serde_json::to_string(&self.streams).unwrap().as_bytes())?;
-//         // state.serialize_field("g", &self.g)?;
-//         // state.serialize_field("b", &self.b)?;
-//         state.end()
-//     }
-// }
-/*
-state: TestState,
-verbose: bool,
-pub debug: bool,
-skip_tls: bool,
-pub cookie: String,
-pub cookie_count: u8,
-settings: Settings,
-idle_timeout_in_secs: Option<Duration>,
-reset_counter: u16,
-pub streams: Vec<PerfStream>,
-pub tokens: Vec<Token>,
-pub start: Instant,
-pub total_bytes: u64,
-pub total_blks: u64,
-*/

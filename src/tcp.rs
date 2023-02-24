@@ -74,18 +74,19 @@ impl<'a> From<&'a mut Box<dyn Stream>> for &'a mut TcpStream {
 }
 
 pub fn connect(addr: std::net::SocketAddr) -> io::Result<TcpStream> {
-    let mut poll = Poll::new().unwrap();
-    let mut events = Events::with_capacity(1024);
-
-    let mut stream = TcpStream::connect(addr)?;
-    poll.registry().register(
-        &mut stream,
-        Token(1),
-        Interest::READABLE | Interest::WRITABLE,
-    )?;
-
     loop {
-        poll.poll(&mut events, Some(Duration::from_millis(10)))?;
+        let mut poll = Poll::new().unwrap();
+        let mut events = Events::with_capacity(1024);
+
+        // mio TcpStream connect is non-blocking and returns unconnected stream
+        let mut stream = TcpStream::connect(addr)?;
+        poll.registry().register(
+            &mut stream,
+            Token(1),
+            Interest::READABLE | Interest::WRITABLE,
+        )?;
+
+        poll.poll(&mut events, Some(Duration::from_secs(1)))?;
         for event in events.iter() {
             match event.token() {
                 Token(1) => {
@@ -94,7 +95,11 @@ pub fn connect(addr: std::net::SocketAddr) -> io::Result<TcpStream> {
                         // connected.
                         match stream.peer_addr() {
                             Ok(..) => return Ok(stream),
-                            Err(_) => continue,
+                            Err(e) => {
+                                println!("{}, retrying...", e.to_string());
+                                std::thread::sleep(Duration::from_millis(1000));
+                                continue;
+                            }
                         }
                     }
                 }

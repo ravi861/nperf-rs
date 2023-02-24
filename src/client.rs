@@ -22,7 +22,7 @@ pub struct ClientImpl {
 impl ClientImpl {
     pub fn new(params: &PerfParams) -> io::Result<ClientImpl> {
         let ip = match &params.client {
-            None => IpAddr::from_str("0.0.0.0").unwrap(),
+            None => IpAddr::from_str("127.0.0.1").unwrap(),
             Some(addr) => match IpAddr::from_str(&addr) {
                 Ok(addr) => addr,
                 Err(e) => {

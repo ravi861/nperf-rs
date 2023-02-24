@@ -1,11 +1,11 @@
 use crate::params::PerfParams;
 use crate::quic::{self, Quic};
 use crate::test::{Conn, PerfStream, Stream, Test, TestState, ONE_SEC};
+use core::panic;
 use mio::net::{TcpListener, TcpStream, UdpSocket};
 use mio::{Events, Interest, Poll, Token, Waker};
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
-use core::panic;
 
 use crate::net::*;
 
