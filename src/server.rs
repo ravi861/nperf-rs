@@ -203,7 +203,7 @@ impl ServerImpl {
                                 let ctrl_ref = self.ctrl.as_ref().unwrap();
                                 test.transition(TestState::TestStart);
                                 send_state(ctrl_ref, TestState::TestStart);
-                                test.server_header();
+                                test.header();
                             }
                         }
                         _ => {}
@@ -220,7 +220,7 @@ impl ServerImpl {
                                     let ctrl_ref = self.ctrl.as_ref().unwrap();
                                     test.transition(TestState::TestStart);
                                     send_state(ctrl_ref, TestState::TestStart);
-                                    test.server_header();
+                                    test.header();
                                 }
                             }
                         }
@@ -238,7 +238,7 @@ impl ServerImpl {
                                     let ctrl_ref = self.ctrl.as_ref().unwrap();
                                     test.transition(TestState::TestStart);
                                     send_state(ctrl_ref, TestState::TestStart);
-                                    test.server_header();
+                                    test.header();
                                 }
                                 break;
                             }

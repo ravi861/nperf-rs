@@ -1,6 +1,9 @@
 use crate::params::PerfParams;
 use crate::quic::{self, Quic};
-use crate::test::{Conn, PerfStream, Stream, StreamMode, Test, TestState, ONE_SEC};
+use crate::test::{
+    Conn, PerfStream, Stream, StreamMode, Test, TestState, MAX_QUIC_PAYLOAD, MAX_TCP_PAYLOAD,
+    MAX_UDP_PAYLOAD, ONE_SEC,
+};
 use mio::net::{TcpStream, UdpSocket};
 use mio::{Events, Interest, Poll, Token, Waker};
 use std::net::{IpAddr, SocketAddr};
@@ -58,6 +61,24 @@ impl ClientImpl {
 
         // todo
         test.mode = StreamMode::SENDER;
+
+        // setup MSS for UDP
+        let ctrl_mss = mss(&self.ctrl) as usize;
+        match test.conn() {
+            Conn::TCP => {
+                if test.length() == 0 {
+                    test.set_length(ctrl_mss);
+                }
+            }
+            Conn::UDP | Conn::QUIC => {
+                if test.length() > 0 {
+                    test.set_length(test.length().min(ctrl_mss));
+                }
+                if test.length() == 0 {
+                    test.set_length(ctrl_mss);
+                }
+            }
+        }
 
         loop {
             poll.poll(&mut events, Some(Duration::from_millis(100)))?;
@@ -149,7 +170,7 @@ impl ClientImpl {
                                 return Ok(());
                             } else {
                                 self.running = true;
-                                test.client_header();
+                                test.header();
                                 for pstream in &mut test.streams {
                                     pstream.stream.register(&mut poll, STREAM);
                                 }
@@ -199,9 +220,9 @@ impl ClientImpl {
                                 let test_time = test.time().clone();
 
                                 // setup buffers
-                                const TCP_BUF: [u8; 131072] = [1; 131072];
-                                let mut udp_buf: [u8; 65500] = [1; 65500];
-                                const QUIC_BUF: [u8; 65500] = [1; 65500];
+                                const TCP_BUF: [u8; MAX_TCP_PAYLOAD] = [1; MAX_TCP_PAYLOAD];
+                                let mut udp_buf: [u8; MAX_UDP_PAYLOAD] = [1; MAX_UDP_PAYLOAD];
+                                const QUIC_BUF: [u8; MAX_QUIC_PAYLOAD] = [1; MAX_QUIC_PAYLOAD];
 
                                 while try_later == false {
                                     for pstream in &mut test.streams {

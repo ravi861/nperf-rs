@@ -70,7 +70,7 @@ impl<'de> serde::Deserialize<'de> for Box<dyn Stream> {
 }
 
 pub const DEFAULT_SESSION_TIMEOUT: u32 = 120;
-pub const MAX_TCP_PAYLOAD: usize = 131071;
+pub const MAX_TCP_PAYLOAD: usize = 131072;
 pub const MAX_UDP_PAYLOAD: usize = 65500;
 pub const MAX_QUIC_PAYLOAD: usize = 65500;
 
@@ -79,7 +79,7 @@ pub const ONE_GB: u64 = 1024 * 1024 * 1024;
 pub const ONE_MB: u64 = 1024 * 1024;
 pub const ONE_KB: u64 = 1024;
 
-#[derive(Serialize, Deserialize, Debug, Copy, Clone)]
+#[derive(Serialize, Deserialize, Copy, Clone)]
 pub enum Conn {
     TCP,
     UDP,
@@ -357,7 +357,7 @@ impl PerfStream {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize)]
 struct Settings {
     conn: Conn,
     num_streams: u8,
@@ -463,11 +463,11 @@ impl Test {
         test.skip_tls = param.skip_tls;
         if param.udp {
             test.settings.conn = Conn::UDP;
-            test.settings.length = MAX_UDP_PAYLOAD;
+            // test.settings.length = MAX_UDP_PAYLOAD;
         }
         if param.quic {
             test.settings.conn = Conn::QUIC;
-            test.settings.length = MAX_QUIC_PAYLOAD;
+            // test.settings.length = MAX_QUIC_PAYLOAD;
         }
         test.settings.time = Duration::from_secs(param.time);
         if param.bytes > 0 {
@@ -568,6 +568,9 @@ impl Test {
     pub fn length(&self) -> usize {
         self.settings.length
     }
+    pub fn set_length(&mut self, length: usize) {
+        self.settings.length = length;
+    }
     pub fn set_idle_timeout(&mut self, idle_timeout: u32) {
         if idle_timeout > 0 {
             self.idle_timeout_in_secs = Some(Duration::from_secs(idle_timeout as u64));
@@ -663,62 +666,58 @@ impl Test {
         if bytes >= ONE_GB {
             let b: f64 = bytes as f64 / ONE_GB as f64;
             let r = (b * 8 as f64) / dur;
-            return format!("{:<6.2} GBytes   {:<5.1} Gbits/sec", b, r).to_string();
+            return format!("{:<6.2} GBytes   {:<6.1} Gbits/sec", b, r).to_string();
         } else if bytes >= ONE_MB {
             let b: f64 = bytes as f64 / ONE_MB as f64;
             let mut r = (b * 8 as f64) / dur;
             if dur < 1.0 {
                 r = 0.0;
             }
-            return format!("{:<6.2} MBytes   {:<5.1} Mbits/sec", b, r).to_string();
+            return format!("{:<6.2} MBytes   {:<6.1} Mbits/sec", b, r).to_string();
         } else if bytes >= ONE_KB {
             let b: f64 = bytes as f64 / ONE_KB as f64;
             let mut r = (b * 8 as f64) / dur;
             if dur < 1.0 {
                 r = 0.0;
             }
-            return format!("{:<6.2} KBytes   {:<5.1} Kbits/sec", b, r).to_string();
+            return format!("{:<6.2} KBytes   {:<6.1} Kbits/sec", b, r).to_string();
         } else {
             let mut r = (bytes as f64 * 8 as f64) / dur;
             if dur < 1.0 {
                 r = 0.0;
             }
-            return format!("{:<6} Bytes    {:<6.1} bits/sec", bytes, r).to_string();
+            return format!("{:<6} Bytes    {:<7.1} bits/sec", bytes, r).to_string();
         }
     }
-    pub fn server_header(&self) {
+    pub fn header(&self) {
         println!(
-            "Starting Test: protocol: {}, {} streams",
+            "Starting Test: protocol: {}, {} streams, {} byte blocks, {} seconds test",
             self.conn(),
-            self.num_streams()
+            self.num_streams(),
+            self.settings.length,
+            self.time().as_secs()
         );
         println!("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
-        match self.conn() {
-            Conn::UDP => {
-                println!("[ FD]  Time  Transfer        Rate             Lost/Total Datagrams")
-            }
-            Conn::TCP => println!("[ FD]  Time  Transfer        Rate             Rx packets"),
-            Conn::QUIC => {
-                println!("[ FD]  Time  Transfer        Rate              Total Datagrams")
-            }
-        }
-        println!("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
-    }
-    pub fn client_header(&self) {
-        println!(
-            "Starting Test: protocol: {}, {} streams",
-            self.conn(),
-            self.num_streams()
-        );
-        println!("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
-        match self.conn() {
-            Conn::UDP => {
-                println!("[ FD]  Time  Transfer        Rate             Total Datagrams")
-            }
-            Conn::TCP => println!("[ FD]  Time  Transfer        Rate             Tx packets"),
-            Conn::QUIC => {
-                println!("[ FD]  Time  Transfer        Rate              Total Datagrams")
-            }
+        match self.mode() {
+            StreamMode::SENDER => match self.conn() {
+                Conn::UDP => {
+                    println!("[ FD]  Time  Transfer        Rate             Total Datagrams")
+                }
+                Conn::TCP => println!("[ FD]  Time  Transfer        Rate             Tx packets"),
+                Conn::QUIC => {
+                    println!("[ FD]  Time  Transfer        Rate              Total Datagrams")
+                }
+            },
+            StreamMode::RECEIVER => match self.conn() {
+                Conn::UDP => {
+                    println!("[ FD]  Time  Transfer        Rate             Lost/Total Datagrams")
+                }
+                Conn::TCP => println!("[ FD]  Time  Transfer        Rate             Rx packets"),
+                Conn::QUIC => {
+                    println!("[ FD]  Time  Transfer        Rate              Total Datagrams")
+                }
+            },
+            _ => {}
         }
         println!("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
     }
