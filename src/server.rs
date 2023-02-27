@@ -1,6 +1,5 @@
 use crate::params::PerfParams;
 use crate::quic::{self, Quic};
-use crate::test::{Conn, PerfStream, Stream, Test, TestState, ONE_SEC};
 use core::panic;
 use mio::net::{TcpListener, TcpStream, UdpSocket};
 use mio::{Events, Interest, Poll, Token, Waker};
@@ -8,6 +7,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 
 use crate::net::*;
+use crate::test::*;
 
 const CONTROL: Token = Token(1024);
 const TCP_LISTENER: Token = Token(1025);
@@ -48,6 +48,20 @@ impl ServerImpl {
             q: None,
         })
     }
+    // run is basically a loop listening on events, initially on the ctrl connection
+    // and then later on the data streams. Each stream type has it's own listener in
+    // the server object.
+    // All test stages are usually managed by the control connection with TestStart
+    // and TestRunning being the exception.
+    //
+    // The TCP listener is slightly different compared to the UDP and QUIC listeners.
+    // The TCP listener's accept produces a new TcpStream object. So, only a single
+    // TCP listener is ever required over the lifetime of the server.
+    // UDP and QUIC listeners are consumed as UdpSockets and quinn::Connection objects.
+    // So each new parallel stream creates a new UdpSocket or quinn::Connection object.
+    //
+    // Most state transitions are initiated by the server. Refer to what each state
+    // means in the TestState documentation.
     pub async fn run(&mut self, test: &mut Test) -> std::io::Result<i8> {
         let mut poll = Poll::new().unwrap();
         let mut events = Events::with_capacity(128);
@@ -254,14 +268,21 @@ impl ServerImpl {
                                 let conn = test.conn();
                                 let pstream = &mut test.streams[token.0];
                                 loop {
-                                    let d = match conn {
+                                    let res = match conn {
                                         Conn::QUIC => {
-                                            quic::read((&mut pstream.stream).into()).await
+                                            let q: &mut Quic = (&mut pstream.stream).into();
+                                            quic::read(q).await
                                         }
-                                        Conn::TCP => pstream.read(&mut buf),
-                                        Conn::UDP => pstream.read(&mut buf),
+                                        Conn::TCP => {
+                                            let t: &mut TcpStream = (&mut pstream.stream).into();
+                                            TcpStream::read(t, &mut buf)
+                                        }
+                                        Conn::UDP => {
+                                            let u: &mut UdpSocket = (&mut pstream.stream).into();
+                                            UdpSocket::read(u, &mut buf)
+                                        }
                                     };
-                                    match d {
+                                    match res {
                                         Ok(0) => break,
                                         Ok(n) => {
                                             pstream.data.bytes += n as u64;

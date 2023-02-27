@@ -15,38 +15,38 @@
 //! - Some CLI options yet to be supported in nperf and some are WIP
 //! - SCTP is unsupported
 //! - No support for --bidir
-//! 
+//!
 //! ## Usage
 //! More options available via help.
-//! 
+//!
 //! ### Server
 //! Binds to [::]:8080 by default
 //! ```bash
 //! cargo run -- -s
 //! ```
-//! 
+//!
 //! ### Client
 //! Connects to 127.0.0.1:8080 by default and tests TCP streams
 //! ```bash
 //! cargo run --
 //! cargo run -- -c 127.0.0.1
 //! ```
-//! 
+//!
 //! Test UDP performance
 //! ```bash
 //! cargo run -- -u
 //! ```
-//! 
+//!
 //! Test QUIC performance
 //! ```bash
 //! cargo run -- -q
 //! '''
-//! 
+//!
 //! Test with parallel streams using -P, period to test with -t
 //! ```bash
 //! cargo run -- -u -P 2 -t 30
 //! ```
-//! 
+//!
 //! ## Future
 //! - Support for TCP congestion algorithm, send/recv buffer sizes
 //! - More performance metrics like rtt, retransmits, congestion window, etc

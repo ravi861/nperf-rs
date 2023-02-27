@@ -1,9 +1,5 @@
 use crate::params::PerfParams;
 use crate::quic::{self, Quic};
-use crate::test::{
-    Conn, PerfStream, Stream, StreamMode, Test, TestState, MAX_QUIC_PAYLOAD, MAX_TCP_PAYLOAD,
-    MAX_UDP_PAYLOAD, ONE_SEC,
-};
 use mio::net::{TcpStream, UdpSocket};
 use mio::{Events, Interest, Poll, Token, Waker};
 use std::net::{IpAddr, SocketAddr};
@@ -12,6 +8,7 @@ use std::time::Duration;
 use std::{io, thread};
 
 use crate::net::*;
+use crate::test::*;
 
 const CONTROL: Token = Token(1024);
 const STREAM: Token = Token(0);
@@ -48,6 +45,13 @@ impl ClientImpl {
             running: false,
         })
     }
+    // run, like the server, is just a loop.
+    // The ctrl connection listens for state transitions from server
+    // and responds with data as necessitated.
+    //
+    // The ClientImpl holds no state and all state is managed within Test.
+    // Except for TestRunning, all other states are managed by the ctrl
+    // connection.
     pub async fn run(&mut self, mut test: Test) -> io::Result<()> {
         let mut poll = Poll::new().unwrap();
         let mut events = Events::with_capacity(1024);
@@ -218,6 +222,7 @@ impl ClientImpl {
                                 let test_blks = test.blks();
                                 let len = test.length();
                                 let test_time = test.time().clone();
+                                let mut elapsed = test.timers.start.elapsed();
 
                                 // setup buffers
                                 const TCP_BUF: [u8; MAX_TCP_PAYLOAD] = [1; MAX_TCP_PAYLOAD];
@@ -226,9 +231,10 @@ impl ClientImpl {
 
                                 while try_later == false {
                                     for pstream in &mut test.streams {
+                                        let t = pstream.timers.curr.elapsed();
                                         if test_bitrate != 0 {
-                                            let rate = (pstream.temp.bytes * 8) as f64
-                                                / pstream.timers.curr.elapsed().as_secs_f64();
+                                            let rate =
+                                                (pstream.temp.bytes * 8) as f64 / t.as_secs_f64();
                                             if rate as u64 > test_bitrate {
                                                 continue;
                                                 // } else {
@@ -238,20 +244,26 @@ impl ClientImpl {
                                                 //     );
                                             }
                                         }
-                                        let d = match conn {
-                                            Conn::TCP => pstream.write(&TCP_BUF[..len]),
+                                        let res = match conn {
+                                            Conn::TCP => {
+                                                let t: &mut TcpStream =
+                                                    (&mut pstream.stream).into();
+                                                TcpStream::write(t, &TCP_BUF[..len])
+                                            }
                                             Conn::UDP => {
                                                 udp_buf[0..8].copy_from_slice(
                                                     &(pstream.data.blks + 1).to_be_bytes(),
                                                 );
-                                                pstream.write(&udp_buf[..len])
+                                                let u: &mut UdpSocket =
+                                                    (&mut pstream.stream).into();
+                                                UdpSocket::write(u, &udp_buf[..len])
                                             }
                                             Conn::QUIC => {
                                                 let q: &mut Quic = (&mut pstream.stream).into();
                                                 quic::write(q, &QUIC_BUF[..len]).await
                                             }
                                         };
-                                        match d {
+                                        match res {
                                             Ok(n) => {
                                                 pstream.data.bytes += n as u64;
                                                 test.data.bytes += n as u64;
@@ -268,22 +280,19 @@ impl ClientImpl {
                                         }
                                         if (test_blks != 0) && (test.data.blks >= test_blks)
                                             || (test_bytes != 0) && (test.data.bytes >= test_bytes)
-                                            || pstream.timers.curr.elapsed() > ONE_SEC
+                                            || t > ONE_SEC
                                         {
                                             pstream.push_stat(test.debug);
-                                            if test.timers.start.elapsed() > test_time {
+                                            elapsed = test.timers.start.elapsed();
+                                            if elapsed > test_time {
                                                 try_later = true;
-                                            }
-                                            match conn {
-                                                Conn::QUIC | Conn::UDP => try_later = true,
-                                                _ => {}
                                             }
                                         }
                                     }
                                 }
                                 if (test_blks != 0) && (test.data.blks >= test_blks)
                                     || (test_bytes != 0) && (test.data.bytes >= test_bytes)
-                                    || (test.timers.start.elapsed() > test_time)
+                                    || (elapsed > test_time)
                                 {
                                     match test.conn() {
                                         Conn::TCP => {
