@@ -126,6 +126,9 @@ impl ServerImpl {
                                 }
                                 match test.conn() {
                                     Conn::TCP => {
+                                        if test.mss() > 0 {
+                                            set_mss_listener(self.t.as_ref().unwrap(), test.mss())?;
+                                        }
                                         // no need of a new tcp listener. Just use ctrl listener for tcp
                                         poll.registry().register(
                                             self.t.as_mut().unwrap(),
@@ -266,6 +269,8 @@ impl ServerImpl {
                                 let mut buf: [u8; 131072] = [0; 131072];
 
                                 let conn = test.conn();
+                                let metrics = test.metrics();
+                                let verbose = test.verbose();
                                 let pstream = &mut test.streams[token.0];
                                 loop {
                                     let res = match conn {
@@ -285,6 +290,7 @@ impl ServerImpl {
                                     match res {
                                         Ok(0) => break,
                                         Ok(n) => {
+                                            metrics.record(verbose);
                                             pstream.data.bytes += n as u64;
                                             test.data.bytes += n as u64;
                                             pstream.temp.bytes += n as u64;

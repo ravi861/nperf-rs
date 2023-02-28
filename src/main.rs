@@ -65,6 +65,8 @@ use crate::test::Test;
 #[doc(hidden)]
 mod client;
 #[doc(hidden)]
+mod metrics;
+#[doc(hidden)]
 mod net;
 #[doc(hidden)]
 mod noprotection;
@@ -90,8 +92,9 @@ fn main() -> io::Result<()> {
             let mut test = Test::from(&param);
             let mut server = ServerImpl::new(&param)?;
             let run = server.run(&mut test);
-            if block_on(run)? < 0 {
-                exit(1);
+            match block_on(run) {
+                Ok(_) => (),
+                Err(e) => println!("Error: {}, restarting", e.to_string()),
             }
             test.reset();
         },
@@ -99,8 +102,13 @@ fn main() -> io::Result<()> {
             let test = Test::from(&param);
             let mut client = ClientImpl::new(&param)?;
             let run = client.run(test);
-            block_on(run)?;
-            exit(0);
+            match block_on(run) {
+                Ok(_) => exit(0),
+                Err(e) => {
+                    println!("Error: {}, exiting", e.to_string());
+                    exit(1);
+                }
+            }
         }
     }
 }

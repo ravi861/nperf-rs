@@ -1,4 +1,4 @@
-use mio::net::{TcpStream, UdpSocket};
+use mio::net::{TcpListener, TcpStream, UdpSocket};
 use socket2::{Domain, Protocol, SockRef, Socket, Type};
 
 use crate::{test::Stream, test::TestState};
@@ -120,13 +120,13 @@ pub fn _set_recv_buffer_size<T: Stream + AsRawFd + 'static>(stream: &T, sz: usiz
         }
     }
 }
-pub fn mss(stream: &TcpStream) -> u32 {
+pub fn set_mss_listener(stream: &TcpListener, mss: u32) -> io::Result<()> {
     let sck = SockRef::from(stream);
-    match sck.mss() {
-        Ok(n) => return n,
+    match sck.set_mss(mss) {
+        Ok(_) => Ok(()),
         Err(e) => {
-            println!("Failed to set nodelay {}", e.to_string());
-            return 0;
+            println!("Failed to set mss {}", mss);
+            return Err(e);
         }
     }
 }

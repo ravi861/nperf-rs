@@ -37,7 +37,7 @@ impl ClientImpl {
         set_nodelay(&ctrl);
         set_linger(&ctrl);
         set_nonblocking(&ctrl, false);
-        println!("Control Connection MSS: {}", mss(&ctrl));
+        println!("Control Connection MSS: {}", crate::tcp::mss(&ctrl));
 
         Ok(ClientImpl {
             server_addr: addr,
@@ -67,7 +67,7 @@ impl ClientImpl {
         test.mode = StreamMode::SENDER;
 
         // setup MSS for UDP
-        let ctrl_mss = mss(&self.ctrl) as usize;
+        let ctrl_mss = crate::tcp::mss(&self.ctrl) as usize;
         match test.conn() {
             Conn::TCP => {
                 if test.length() == 0 {
@@ -115,6 +115,9 @@ impl ClientImpl {
                                     }
                                     Conn::TCP => {
                                         let stream = crate::tcp::connect(self.server_addr)?;
+                                        if test.mss() > 0 {
+                                            crate::tcp::set_mss(&stream, test.mss())?;
+                                        }
                                         stream.print_new_stream();
                                         test.streams.push(PerfStream::new(stream, test.mode()));
                                     }
@@ -216,6 +219,8 @@ impl ClientImpl {
                                 let mut try_later = false;
 
                                 // fetch test attributes
+                                let verbose = test.verbose();
+                                let metrics = test.metrics();
                                 let conn = test.conn();
                                 let test_bitrate = test.bitrate();
                                 let test_bytes = test.bytes();
@@ -264,6 +269,10 @@ impl ClientImpl {
                                             }
                                         };
                                         match res {
+                                            Ok(0) => {
+                                                try_later = true;
+                                                break;
+                                            }
                                             Ok(n) => {
                                                 pstream.data.bytes += n as u64;
                                                 test.data.bytes += n as u64;
@@ -271,6 +280,7 @@ impl ClientImpl {
                                                 pstream.data.blks += 1;
                                                 test.data.blks += 1;
                                                 pstream.temp.blks += 1;
+                                                metrics.record(verbose);
                                             }
                                             Err(_e) => {
                                                 //println!("Is there error");
