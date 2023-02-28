@@ -15,38 +15,38 @@
 //! - Some CLI options yet to be supported in nperf and some are WIP
 //! - SCTP is unsupported
 //! - No support for --bidir
-//! 
+//!
 //! ## Usage
 //! More options available via help.
-//! 
+//!
 //! ### Server
 //! Binds to [::]:8080 by default
 //! ```bash
 //! cargo run -- -s
 //! ```
-//! 
+//!
 //! ### Client
 //! Connects to 127.0.0.1:8080 by default and tests TCP streams
 //! ```bash
 //! cargo run --
 //! cargo run -- -c 127.0.0.1
 //! ```
-//! 
+//!
 //! Test UDP performance
 //! ```bash
 //! cargo run -- -u
 //! ```
-//! 
+//!
 //! Test QUIC performance
 //! ```bash
 //! cargo run -- -q
 //! '''
-//! 
+//!
 //! Test with parallel streams using -P, period to test with -t
 //! ```bash
 //! cargo run -- -u -P 2 -t 30
 //! ```
-//! 
+//!
 //! ## Future
 //! - Support for TCP congestion algorithm, send/recv buffer sizes
 //! - More performance metrics like rtt, retransmits, congestion window, etc
@@ -64,6 +64,8 @@ use crate::test::Test;
 
 #[doc(hidden)]
 mod client;
+#[doc(hidden)]
+mod metrics;
 #[doc(hidden)]
 mod net;
 #[doc(hidden)]
@@ -90,8 +92,9 @@ fn main() -> io::Result<()> {
             let mut test = Test::from(&param);
             let mut server = ServerImpl::new(&param)?;
             let run = server.run(&mut test);
-            if block_on(run)? < 0 {
-                exit(1);
+            match block_on(run) {
+                Ok(_) => (),
+                Err(e) => println!("Error: {}, restarting", e.to_string()),
             }
             test.reset();
         },
@@ -99,8 +102,13 @@ fn main() -> io::Result<()> {
             let test = Test::from(&param);
             let mut client = ClientImpl::new(&param)?;
             let run = client.run(test);
-            block_on(run)?;
-            exit(0);
+            match block_on(run) {
+                Ok(_) => exit(0),
+                Err(e) => {
+                    println!("Error: {}, exiting", e.to_string());
+                    exit(1);
+                }
+            }
         }
     }
 }

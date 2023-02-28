@@ -89,7 +89,7 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
     let recv_timeout: u32 = DEFAULT_SESSION_TIMEOUT;
     let idle_timeout: u32 = 0;
     let mut num_streams: u8 = 1;
-    let mss: u32 = 0;
+    let mut mss: u32 = 0;
     let mut bitrate: String = String::from("abcdef");
     let mut time: u64 = 10;
     let mut bytes: String = String::from("abcdef");
@@ -169,11 +169,11 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
             Store,
             "[c] number of parallel client streams to run",
         );
-        // args.refer(&mut mss).add_option(
-        //     &["-M", "--set-mss"],
-        //     Store,
-        //     "[c] set TCP maximum segment size",
-        // );
+        args.refer(&mut mss).add_option(
+            &["-M", "--set-mss"],
+            Store,
+            "[c] set TCP maximum segment size",
+        );
         // args.refer(&mut sendbuf).add_option(
         //     &["--send-buf-size"],
         //     Store,

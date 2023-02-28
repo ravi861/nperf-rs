@@ -41,12 +41,13 @@ impl Stream for TcpStream {
     fn print_new_stream(&self) {
         let sck = SockRef::from(self);
         println!(
-            "[{:>3}] local {}, peer {} sndbuf {} rcvbuf {}",
+            "[{:>3}] local {}, peer {} sndbuf {} rcvbuf {} mss {}",
             self.as_raw_fd(),
             self.local_addr().unwrap(),
             self.peer_addr().unwrap(),
             sck.send_buffer_size().unwrap(),
-            sck.recv_buffer_size().unwrap()
+            sck.recv_buffer_size().unwrap(),
+            sck.mss().unwrap()
         );
     }
     fn socket_type(&self) -> Conn {
@@ -70,6 +71,28 @@ impl<'a> From<&'a mut Box<dyn Stream>> for &'a mut TcpStream {
             None => panic!("Stream is not a {}", stringify!(TcpStream)),
         };
         b
+    }
+}
+
+pub fn mss(stream: &TcpStream) -> u32 {
+    let sck = SockRef::from(stream);
+    match sck.mss() {
+        Ok(n) => return n,
+        Err(e) => {
+            println!("Failed to get mss {}", e.to_string());
+            return 0;
+        }
+    }
+}
+
+pub fn set_mss(stream: &TcpStream, mss: u32) -> io::Result<()> {
+    let sck = SockRef::from(stream);
+    match sck.set_mss(mss) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            println!("Failed to set mss {}", mss);
+            return Err(e);
+        }
     }
 }
 
@@ -143,4 +166,18 @@ pub async fn accept(listener: &mut TcpListener) -> io::Result<TcpStream> {
             }
         }
     }
+}
+
+pub fn _bind(addr: std::net::SocketAddr, mss: u32) -> io::Result<TcpListener> {
+    let sck = socket2::Socket::new(
+        socket2::Domain::for_address(addr),
+        socket2::Type::STREAM,
+        Some(socket2::Protocol::TCP),
+    )
+    .unwrap();
+    sck.set_reuse_address(true).unwrap();
+    sck.set_mss(mss).unwrap();
+    sck.bind(&addr.into()).unwrap();
+    sck.listen(1024).unwrap();
+    Ok(TcpListener::from_std(std::net::TcpListener::from(sck)))
 }

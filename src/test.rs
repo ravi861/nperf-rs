@@ -1,4 +1,4 @@
-use crate::params::PerfParams;
+use crate::{metrics::Metrics, params::PerfParams};
 use mio::{Poll, Token};
 use serde::{ser::SerializeStruct, Deserialize, Deserializer, Serialize, Serializer};
 use serde_json;
@@ -424,6 +424,8 @@ pub struct Test {
     #[serde(skip)]
     peer: StreamData,
     peer_mode: StreamMode,
+    #[serde(skip)]
+    metrics: Metrics,
 }
 
 impl Test {
@@ -448,6 +450,7 @@ impl Test {
             peer_elapsed: 0.0,
             peer: StreamData::default(),
             peer_mode: StreamMode::SENDER,
+            metrics: Metrics::default(),
         }
     }
     pub fn from(param: &PerfParams) -> Test {
@@ -480,6 +483,9 @@ impl Test {
         }
         if param.length > 0 {
             test.settings.length = param.length as usize;
+        }
+        if param.mss > 0 {
+            test.settings.mss = param.mss;
         }
         test
     }
@@ -612,6 +618,9 @@ impl Test {
     pub fn results(&self) -> String {
         serde_json::to_string(&self).unwrap()
     }
+    pub fn metrics(&self) -> Metrics {
+        self.metrics.clone()
+    }
     pub fn print_stats(&self) {
         println!("- - - - - - - - - - - - - Results Per Stream- - - - - - - - - - - - - - -");
         for pstream in &self.streams {
@@ -645,6 +654,7 @@ impl Test {
         }
         if self.mode == StreamMode::RECEIVER {
             println!("");
+            self.metrics.print();
             return;
         }
         println!(
@@ -661,6 +671,7 @@ impl Test {
             );
         }
         println!("");
+        self.metrics.print();
     }
     pub fn kmg(bytes: u64, dur: f64) -> String {
         if bytes >= ONE_GB {
