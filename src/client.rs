@@ -71,14 +71,16 @@ impl ClientImpl {
         match test.conn() {
             Conn::TCP => {
                 if test.length() == 0 {
-                    test.set_length(ctrl_mss);
+                    test.set_length(MAX_TCP_PAYLOAD);
                 }
             }
             Conn::UDP | Conn::QUIC => {
-                if test.length() > 0 {
-                    test.set_length(test.length().min(ctrl_mss));
+                if test.length() > MAX_UDP_PAYLOAD {
+                    println!("Setting UDP payload length as {}", MAX_UDP_PAYLOAD);
+                    test.set_length(MAX_UDP_PAYLOAD);
                 }
                 if test.length() == 0 {
+                    println!("Setting UDP payload length as {}", ctrl_mss);
                     test.set_length(ctrl_mss);
                 }
             }

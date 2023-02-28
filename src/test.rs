@@ -75,9 +75,14 @@ pub const MAX_UDP_PAYLOAD: usize = 65500;
 pub const MAX_QUIC_PAYLOAD: usize = 65500;
 
 pub const ONE_SEC: Duration = Duration::from_secs(1);
-pub const ONE_GB: u64 = 1024 * 1024 * 1024;
-pub const ONE_MB: u64 = 1024 * 1024;
-pub const ONE_KB: u64 = 1024;
+pub const ONE_KB: f64 = 1024 as f64;
+pub const ONE_MB: f64 = (1024 * 1024) as f64;
+pub const ONE_GB: f64 = (1024 * 1024 * 1024) as f64;
+pub const ONE_TB: u64 = 1024 * 1024 * 1024 * 1024;
+pub const ONE_K: f64 = 1000.0;
+pub const ONE_M: f64 = 1000.0 * 1000.0;
+pub const ONE_G: f64 = 1000.0 * 1000.0 * 1000.0;
+pub const ONE_T: f64 = 1000.0 * 1000.0 * 1000.0 * 1000.0;
 
 #[derive(Serialize, Deserialize, Copy, Clone)]
 pub enum Conn {
@@ -384,7 +389,7 @@ impl Default for Settings {
             time: Duration::from_secs(10),
             bytes: 0,
             blks: 0,
-            length: MAX_TCP_PAYLOAD,
+            length: 0,
         }
     }
 }
@@ -622,7 +627,7 @@ impl Test {
         self.metrics.clone()
     }
     pub fn print_stats(&self) {
-        println!("- - - - - - - - - - - - - Results Per Stream- - - - - - - - - - - - - - -");
+        println!("- - - - - - - - - - - - - Results Per Stream- - - - - - - - - - - - - - - -");
         for pstream in &self.streams {
             println!("{}", pstream);
             if self.debug {
@@ -641,7 +646,7 @@ impl Test {
                 )
             }
         }
-        println!("- - - - - - - - - - - - - - - All Streams - - - - - - - - - - - - - - - -");
+        println!("- - - - - - - - - - - - - - - All Streams - - - - - - - - - - - - - - - - -");
         println!(
             "[Sum]  {:>3}s  {}  {}  {}",
             self.elapsed as u64,
@@ -674,31 +679,48 @@ impl Test {
         self.metrics.print();
     }
     pub fn kmg(bytes: u64, dur: f64) -> String {
-        if bytes >= ONE_GB {
-            let b: f64 = bytes as f64 / ONE_GB as f64;
-            let r = (b * 8 as f64) / dur;
-            return format!("{:<6.2} GBytes   {:<6.1} Gbits/sec", b, r).to_string();
+        let bits = (bytes * 8) as f64;
+        let bytes = bytes as f64;
+
+        let total_bytes = if bytes >= ONE_TB as f64 {
+            format!("{:<7.2} TBytes", bytes / ONE_TB as f64)
+        } else if bytes >= ONE_GB {
+            format!("{:<7.2} GBytes", bytes / ONE_GB)
         } else if bytes >= ONE_MB {
-            let b: f64 = bytes as f64 / ONE_MB as f64;
-            let mut r = (b * 8 as f64) / dur;
-            if dur < 1.0 {
-                r = 0.0;
-            }
-            return format!("{:<6.2} MBytes   {:<6.1} Mbits/sec", b, r).to_string();
+            format!("{:<7.2} MBytes", bytes / ONE_MB)
         } else if bytes >= ONE_KB {
-            let b: f64 = bytes as f64 / ONE_KB as f64;
-            let mut r = (b * 8 as f64) / dur;
-            if dur < 1.0 {
-                r = 0.0;
-            }
-            return format!("{:<6.2} KBytes   {:<6.1} Kbits/sec", b, r).to_string();
+            format!("{:<7.2} KBytes", bytes / ONE_KB)
         } else {
-            let mut r = (bytes as f64 * 8 as f64) / dur;
+            format!("{:<8} Bytes", bytes)
+        }
+        .to_string();
+
+        let rate = if bits >= ONE_TB as f64 {
+            format!("{:<6.1} Tbits/sec", (bits / ONE_T) / dur)
+        } else if bits >= ONE_GB {
+            format!("{:<6.1} Gbits/sec", (bits / ONE_G) / dur)
+        } else if bits >= ONE_MB {
+            let mut r = (bits / ONE_M) / dur;
             if dur < 1.0 {
                 r = 0.0;
             }
-            return format!("{:<6} Bytes    {:<7.1} bits/sec", bytes, r).to_string();
+            format!("{:<6.1} Mbits/sec", r)
+        } else if bits >= ONE_KB {
+            let mut r = (bits / ONE_K) / dur;
+            if dur < 1.0 {
+                r = 0.0;
+            }
+            format!("{:<6.1} Kbits/sec", r)
+        } else {
+            let mut r = bits / dur;
+            if dur < 1.0 {
+                r = 0.0;
+            }
+            format!("{:<7.1} bits/sec", r)
         }
+        .to_string();
+
+        format!("{}   {}", total_bytes, rate).to_string()
     }
     pub fn header(&self) {
         println!(
@@ -708,28 +730,28 @@ impl Test {
             self.settings.length,
             self.time().as_secs()
         );
-        println!("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
+        println!("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
         match self.mode() {
             StreamMode::SENDER => match self.conn() {
                 Conn::UDP => {
-                    println!("[ FD]  Time  Transfer        Rate             Total Datagrams")
+                    println!("[ FD]  Time  Transfer         Rate              Total Datagrams")
                 }
-                Conn::TCP => println!("[ FD]  Time  Transfer        Rate             Tx packets"),
+                Conn::TCP => println!("[ FD]  Time  Transfer         Rate              Tx packets"),
                 Conn::QUIC => {
-                    println!("[ FD]  Time  Transfer        Rate              Total Datagrams")
+                    println!("[ FD]  Time  Transfer         Rate              Total Datagrams")
                 }
             },
             StreamMode::RECEIVER => match self.conn() {
                 Conn::UDP => {
-                    println!("[ FD]  Time  Transfer        Rate             Lost/Total Datagrams")
+                    println!("[ FD]  Time  Transfer         Rate              Lost/Total Datagrams")
                 }
-                Conn::TCP => println!("[ FD]  Time  Transfer        Rate             Rx packets"),
+                Conn::TCP => println!("[ FD]  Time  Transfer         Rate              Rx packets"),
                 Conn::QUIC => {
-                    println!("[ FD]  Time  Transfer        Rate              Total Datagrams")
+                    println!("[ FD]  Time  Transfer         Rate              Total Datagrams")
                 }
             },
             _ => {}
         }
-        println!("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
+        println!("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
     }
 }
