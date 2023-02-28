@@ -94,7 +94,11 @@ pub fn connect(addr: std::net::SocketAddr) -> io::Result<TcpStream> {
                         // If we can get a peer address it means the stream is
                         // connected.
                         match stream.peer_addr() {
-                            Ok(..) => return Ok(stream),
+                            Ok(..) => {
+                                // for some reason debug build act weird without this
+                                poll.registry().deregister(&mut stream)?;
+                                return Ok(stream);
+                            }
                             Err(e) => {
                                 println!("{}, retrying...", e.to_string());
                                 std::thread::sleep(Duration::from_millis(1000));
@@ -126,7 +130,11 @@ pub async fn accept(listener: &mut TcpListener) -> io::Result<TcpStream> {
                         // If we can get a peer address it means the stream is
                         // connected.
                         match stream.peer_addr() {
-                            Ok(..) => return Ok(stream),
+                            Ok(..) => {
+                                // for some reason debug build act weird without this
+                                poll.registry().deregister(listener)?;
+                                return Ok(stream);
+                            }
                             Err(_) => continue,
                         }
                     }
