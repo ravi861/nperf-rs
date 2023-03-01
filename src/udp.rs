@@ -1,8 +1,10 @@
-use std::{
-    any::Any,
-    io,
-    os::unix::prelude::{AsRawFd, RawFd},
-};
+#[cfg(unix)]
+use std::os::unix::prelude::{AsRawFd, RawFd};
+#[cfg(windows)]
+use std::os::windows::prelude::AsRawSocket as AsRawFd;
+#[cfg(windows)]
+use std::os::windows::prelude::RawSocket as RawFd;
+use std::{any::Any, io};
 
 use mio::{net::UdpSocket, Interest, Poll, Token};
 use socket2::SockRef;
@@ -22,7 +24,10 @@ impl Stream for UdpSocket {
         self.send(buf)
     }
     fn fd(&self) -> RawFd {
-        self.as_raw_fd()
+        #[cfg(unix)]
+        return self.as_raw_fd();
+        #[cfg(windows)]
+        self.as_raw_socket()
     }
     fn register(&mut self, poll: &mut Poll, token: Token) {
         poll.registry()
@@ -42,7 +47,7 @@ impl Stream for UdpSocket {
         let sck = SockRef::from(self);
         println!(
             "[{:>3}] local {}, peer {} sndbuf {} rcvbuf {}",
-            self.as_raw_fd(),
+            self.fd(),
             self.local_addr().unwrap(),
             self.peer_addr().unwrap(),
             sck.send_buffer_size().unwrap(),

@@ -2,13 +2,19 @@ use std::any::Any;
 use std::fs::{self};
 use std::io::{self, Error};
 use std::net::{SocketAddr, UdpSocket};
+#[cfg(unix)]
 use std::os::unix::prelude::{AsRawFd, RawFd};
+#[cfg(windows)]
+use std::os::windows::prelude::AsRawSocket as AsRawFd;
+#[cfg(windows)]
+use std::os::windows::prelude::RawSocket as RawFd;
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::net::*;
 use crate::noprotection::{NoProtectionClientConfig, NoProtectionServerConfig};
 use crate::test::{Conn, Stream};
+#[cfg(unix)]
 use mio::unix::SourceFd;
 use mio::{event, Interest, Poll, Registry, Token};
 use quinn::{AsyncStdRuntime, Connection, Endpoint, RecvStream, SendStream};
@@ -29,6 +35,7 @@ pub struct Quic {
     pub recv_streams: Vec<RecvStream>,
 }
 
+#[cfg(unix)]
 impl event::Source for Quic {
     fn register(
         &mut self,
@@ -68,11 +75,13 @@ impl Stream for Quic {
         self.fd
     }
     fn register(&mut self, poll: &mut Poll, token: Token) {
+        #[cfg(unix)]
         poll.registry()
             .register(self, token, Interest::WRITABLE)
             .unwrap();
     }
     fn deregister(&mut self, poll: &mut Poll) {
+        #[cfg(unix)]
         poll.registry().deregister(self).unwrap();
     }
     fn as_any(&self) -> &dyn Any {
@@ -164,7 +173,10 @@ pub fn server(addr: SocketAddr, skip_tls: bool, k: Option<String>, c: Option<Str
     server_config.transport_config(Arc::new(transport));
 
     let socket = create_net_udp_socket(addr);
+    #[cfg(unix)]
     let fd = socket.as_raw_fd();
+    #[cfg(windows)]
+    let fd = socket.as_raw_socket();
     let endpoint = quinn::Endpoint::new(
         Default::default(),
         Some(server_config),
@@ -184,7 +196,10 @@ pub fn server(addr: SocketAddr, skip_tls: bool, k: Option<String>, c: Option<Str
 
 pub async fn client(addr: SocketAddr, skip_tls: bool) -> Quic {
     let socket = UdpSocket::bind("[::]:0".parse::<SocketAddr>().unwrap()).unwrap();
+    #[cfg(unix)]
     let fd = socket.as_raw_fd();
+    #[cfg(windows)]
+    let fd = socket.as_raw_socket();
     let endpoint = quinn::Endpoint::new(Default::default(), None, socket, AsyncStdRuntime).unwrap();
 
     let mut crypto = rustls::ClientConfig::builder()

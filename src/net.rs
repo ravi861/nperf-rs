@@ -5,7 +5,10 @@ use crate::{test::Stream, test::TestState};
 use std::io::Error;
 use std::io::{self, Read, Write};
 use std::net::SocketAddr;
+#[cfg(unix)]
 use std::os::unix::io::AsRawFd;
+#[cfg(windows)]
+use std::os::windows::io::AsRawSocket as AsRawFd;
 use std::time::Duration;
 
 pub fn gettime() -> String {
@@ -122,13 +125,18 @@ pub fn _set_recv_buffer_size<T: Stream + AsRawFd + 'static>(stream: &T, sz: usiz
 }
 pub fn set_mss_listener(stream: &TcpListener, mss: u32) -> io::Result<()> {
     let sck = SockRef::from(stream);
-    match sck.set_mss(mss) {
-        Ok(_) => Ok(()),
-        Err(e) => {
-            println!("Failed to set mss {}", mss);
-            return Err(e);
+    #[cfg(unix)]
+    {
+        match sck.set_mss(mss) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                println!("Failed to set mss {}", mss);
+                return Err(e);
+            }
         }
     }
+    #[cfg(windows)]
+    Ok(())
 }
 
 pub fn create_net_udp_socket(addr: SocketAddr) -> std::net::UdpSocket {

@@ -4,12 +4,13 @@ use mio::{
     Events, Interest, Poll, Token,
 };
 use socket2::SockRef;
-use std::{
-    any::Any,
-    io,
-    os::unix::prelude::{AsRawFd, RawFd},
-    time::Duration,
-};
+#[cfg(unix)]
+use std::os::unix::prelude::{AsRawFd, RawFd};
+#[cfg(windows)]
+use std::os::windows::prelude::AsRawSocket as AsRawFd;
+#[cfg(windows)]
+use std::os::windows::prelude::RawSocket as RawFd;
+use std::{any::Any, io, time::Duration};
 
 impl Stream for TcpStream {
     #[inline(always)]
@@ -22,7 +23,10 @@ impl Stream for TcpStream {
         std::io::Write::write(self, buf)
     }
     fn fd(&self) -> RawFd {
-        self.as_raw_fd()
+        #[cfg(unix)]
+        return self.as_raw_fd();
+        #[cfg(windows)]
+        self.as_raw_socket()
     }
     fn register(&mut self, poll: &mut Poll, token: Token) {
         poll.registry()
@@ -40,14 +44,24 @@ impl Stream for TcpStream {
     }
     fn print_new_stream(&self) {
         let sck = SockRef::from(self);
+        #[cfg(unix)]
         println!(
             "[{:>3}] local {}, peer {} sndbuf {} rcvbuf {} mss {}",
-            self.as_raw_fd(),
+            self.fd(),
             self.local_addr().unwrap(),
             self.peer_addr().unwrap(),
             sck.send_buffer_size().unwrap(),
             sck.recv_buffer_size().unwrap(),
             sck.mss().unwrap()
+        );
+        #[cfg(windows)]
+        println!(
+            "[{:>3}] local {}, peer {} sndbuf {} rcvbuf {}",
+            self.fd(),
+            self.local_addr().unwrap(),
+            self.peer_addr().unwrap(),
+            sck.send_buffer_size().unwrap(),
+            sck.recv_buffer_size().unwrap(),
         );
     }
     fn socket_type(&self) -> Conn {
@@ -75,25 +89,35 @@ impl<'a> From<&'a mut Box<dyn Stream>> for &'a mut TcpStream {
 }
 
 pub fn mss(stream: &TcpStream) -> u32 {
-    let sck = SockRef::from(stream);
-    match sck.mss() {
-        Ok(n) => return n,
-        Err(e) => {
-            println!("Failed to get mss {}", e.to_string());
-            return 0;
+    #[cfg(unix)]
+    {
+        let sck = SockRef::from(stream);
+        match sck.mss() {
+            Ok(n) => return n,
+            Err(e) => {
+                println!("Failed to get mss {}", e.to_string());
+                return 0;
+            }
         }
     }
+    #[cfg(windows)]
+    1448
 }
 
 pub fn set_mss(stream: &TcpStream, mss: u32) -> io::Result<()> {
-    let sck = SockRef::from(stream);
-    match sck.set_mss(mss) {
-        Ok(_) => Ok(()),
-        Err(e) => {
-            println!("Failed to set mss {}", mss);
-            return Err(e);
+    #[cfg(unix)]
+    {
+        let sck = SockRef::from(stream);
+        match sck.set_mss(mss) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                println!("Failed to set mss {}", mss);
+                return Err(e);
+            }
         }
     }
+    #[cfg(windows)]
+    Ok(())
 }
 
 pub fn connect(addr: std::net::SocketAddr) -> io::Result<TcpStream> {
@@ -176,6 +200,7 @@ pub fn _bind(addr: std::net::SocketAddr, mss: u32) -> io::Result<TcpListener> {
     )
     .unwrap();
     sck.set_reuse_address(true).unwrap();
+    #[cfg(unix)]
     sck.set_mss(mss).unwrap();
     sck.bind(&addr.into()).unwrap();
     sck.listen(1024).unwrap();

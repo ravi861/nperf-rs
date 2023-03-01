@@ -2,12 +2,15 @@ use crate::{metrics::Metrics, params::PerfParams};
 use mio::{Poll, Token};
 use serde::{ser::SerializeStruct, Deserialize, Deserializer, Serialize, Serializer};
 use serde_json;
+#[cfg(unix)]
+use std::os::unix::prelude::RawFd;
+#[cfg(windows)]
+use std::os::windows::prelude::RawSocket as RawFd;
 use std::{
     any::Any,
     fmt::Display,
     io::{self},
     ops::Sub,
-    os::unix::prelude::RawFd,
     time::{Duration, Instant},
 };
 
@@ -474,6 +477,11 @@ impl Test {
             // test.settings.length = MAX_UDP_PAYLOAD;
         }
         if param.quic {
+            #[cfg(windows)]
+            {
+                println!("QUIC is unsupported on windows, exiting");
+                std::process::exit(1);
+            }
             test.settings.conn = Conn::QUIC;
             // test.settings.length = MAX_QUIC_PAYLOAD;
         }

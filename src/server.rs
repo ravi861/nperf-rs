@@ -151,6 +151,7 @@ impl ServerImpl {
                                             Some(String::from("cert.key")),
                                             Some(String::from("cert.crt")),
                                         ));
+                                        #[cfg(unix)]
                                         poll.registry().register(
                                             self.q.as_mut().unwrap(),
                                             QUIC_LISTENER,
@@ -417,6 +418,7 @@ impl ServerImpl {
 
         let token = Token(TOKEN_START + test.tokens.len());
         test.tokens.push(token);
+        #[cfg(unix)]
         poll.registry()
             .reregister(self.q.as_mut().unwrap(), token, Interest::READABLE)
             .unwrap();
@@ -433,6 +435,7 @@ impl ServerImpl {
                 Some(String::from("cert.key")),
                 Some(String::from("cert.crt")),
             ));
+            #[cfg(unix)]
             poll.registry()
                 .register(
                     self.q.as_mut().unwrap(),
