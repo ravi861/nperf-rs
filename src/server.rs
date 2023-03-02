@@ -345,8 +345,8 @@ impl ServerImpl {
                                     }
                                     Conn::UDP => {
                                         let pstream = &mut test.streams[token.0];
-                                        let mut buf = [0; 32];
-                                        let n = pstream.read(&mut buf)?;
+                                        let u: &UdpSocket = (&pstream.stream).into();
+                                        let n = drain_udp_message(&u)?;
                                         if test.debug {
                                             println!("Cookie: {:?}", n);
                                         }

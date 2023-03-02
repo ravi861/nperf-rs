@@ -53,6 +53,28 @@ pub fn drain_message(mut stream: &TcpStream) -> io::Result<String> {
     }
 }
 
+pub fn drain_udp_message(mut stream: &UdpSocket) -> io::Result<String> {
+    let mut buf = String::new();
+    loop {
+        let mut data = [0; 8192];
+        match stream.recv(&mut data) {
+            Ok(0) => {
+                return Err(Error::last_os_error());
+            }
+            Ok(n) => {
+                buf += String::from_utf8(data[0..n].to_vec()).unwrap().as_str();
+            }
+            Err(ref e) => {
+                match e.kind() {
+                    io::ErrorKind::Interrupted => continue,
+                    io::ErrorKind::WouldBlock => return Ok(buf),
+                    _ => return Err(Error::last_os_error()),
+                };
+            }
+        }
+    }
+}
+
 pub fn send_state(stream: &TcpStream, state: TestState) {
     let byte: &mut [u8] = &mut [state as u8];
     write_socket(&stream, byte).unwrap();

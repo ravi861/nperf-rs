@@ -457,7 +457,7 @@ impl Test {
             data: StreamData::default(),
             peer_elapsed: 0.0,
             peer: StreamData::default(),
-            peer_mode: StreamMode::SENDER,
+            peer_mode: StreamMode::RECEIVER,
             metrics: Metrics::default(),
         }
     }
