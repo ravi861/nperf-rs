@@ -114,8 +114,12 @@ impl ClientImpl {
                                 thread::sleep(Duration::from_millis(10));
                                 match test.conn() {
                                     Conn::UDP => {
-                                        let stream =
-                                            UdpSocket::bind("[::]:0".parse().unwrap()).unwrap();
+                                        let ip = if self.server_addr.is_ipv4() {
+                                            "0.0.0.0:0"
+                                        } else {
+                                            "[::]:0"
+                                        };
+                                        let stream = UdpSocket::bind(ip.parse().unwrap()).unwrap();
                                         stream.connect(self.server_addr).unwrap();
                                         stream.send("hello".as_bytes())?;
                                         stream.print_new_stream();
