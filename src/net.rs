@@ -25,38 +25,30 @@ pub fn write_socket(mut stream: &TcpStream, buf: &[u8]) -> io::Result<usize> {
             return Ok(0);
         }
         Err(e) => {
-            println!("Some error {}", e);
+            println!("Write error {}", e);
             return Err(e.into());
         }
     }
 }
 
-pub fn read_socket(mut stream: &TcpStream) -> io::Result<String> {
-    let mut buf = [0; 8192];
-    match stream.read(&mut buf) {
-        Ok(0) => {
-            // println!("Zero bytes read");
-            return Err(Error::last_os_error());
-        }
-        Ok(n) => {
-            let data = String::from_utf8(buf[0..n].to_vec()).unwrap();
-            return Ok(data);
-        }
-        Err(e) => {
-            // println!("Some error {}", e);
-            return Err(e.into());
-        }
-    }
-}
-
-pub fn drain_message(stream: &TcpStream) -> io::Result<String> {
+pub fn drain_message(mut stream: &TcpStream) -> io::Result<String> {
     let mut buf = String::new();
     loop {
-        match read_socket(stream) {
-            Ok(data) => {
-                buf += &data;
+        let mut data = [0; 8192];
+        match stream.read(&mut data) {
+            Ok(0) => {
+                return Err(Error::last_os_error());
             }
-            Err(_) => return Ok(buf),
+            Ok(n) => {
+                buf += String::from_utf8(data[0..n].to_vec()).unwrap().as_str();
+            }
+            Err(ref e) => {
+                match e.kind() {
+                    io::ErrorKind::Interrupted => continue,
+                    io::ErrorKind::WouldBlock => return Ok(buf),
+                    _ => return Err(Error::last_os_error()),
+                };
+            }
         }
     }
 }

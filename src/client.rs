@@ -50,7 +50,7 @@ impl ClientImpl {
     // and responds with data as necessitated.
     //
     // The ClientImpl holds no state and all state is managed within Test.
-    // Except for TestRunning, all other states are managed by the ctrl
+    // Except for TestRunning, all other states are handled by the ctrl
     // connection.
     pub async fn run(&mut self, mut test: Test) -> io::Result<()> {
         let mut poll = Poll::new().unwrap();
@@ -184,6 +184,9 @@ impl ClientImpl {
                             if event.is_readable() {
                                 if self.running {
                                     // this state for this token can only be hit if the server is shutdown unplanned
+                                    if test.debug() {
+                                        println!("Remote error, ending test");
+                                    }
                                     test.end(&mut poll);
                                     test.print_stats();
                                     return Ok(());
