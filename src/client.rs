@@ -181,21 +181,23 @@ impl ClientImpl {
                             test.transition(TestState::TestRunning);
                         }
                         TestState::TestRunning => {
-                            if self.running {
-                                // this state for this token can only be hit if the server is shutdown unplanned
-                                test.end(&mut poll);
-                                test.print_stats();
-                                return Ok(());
-                            } else {
-                                if event.is_readable() {
-                                    drain_message(&self.ctrl)?;
+                            if event.is_readable() {
+                                if self.running {
+                                    // this state for this token can only be hit if the server is shutdown unplanned
+                                    test.end(&mut poll);
+                                    test.print_stats();
+                                    return Ok(());
+                                } else {
+                                    if event.is_readable() {
+                                        drain_message(&self.ctrl)?;
+                                    }
+                                    self.running = true;
+                                    test.header();
+                                    for pstream in &mut test.streams {
+                                        pstream.stream.register(&mut poll, STREAM);
+                                    }
+                                    test.start();
                                 }
-                                self.running = true;
-                                test.header();
-                                for pstream in &mut test.streams {
-                                    pstream.stream.register(&mut poll, STREAM);
-                                }
-                                test.start();
                             }
                         }
                         TestState::ExchangeResults => {
