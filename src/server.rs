@@ -73,7 +73,7 @@ impl ServerImpl {
         println!("Accepted ctrl connection from {}", stream.peer_addr()?);
         set_nodelay(&stream);
         set_linger(&stream);
-        set_nonblocking(&stream, false);
+        set_nonblocking(&stream, true);
         self.ctrl = Some(stream);
         poll.registry().register(
             self.ctrl.as_mut().unwrap(),
@@ -100,25 +100,15 @@ impl ServerImpl {
                         TestState::Start => {
                             if event.is_readable() {
                                 let ctrl_ref = self.ctrl.as_mut().unwrap();
-                                let mut buf = [0; 32];
-                                match ctrl_ref.read(&mut buf) {
-                                    Ok(_) => {
-                                        test.cookie =
-                                            String::from_utf8(buf.to_vec()).unwrap().to_string()
-                                    }
-                                    Err(e) => {
-                                        println!("Unable to read cookie, e {}", e.to_string());
-                                        return Ok(2);
-                                    }
-                                };
+                                test.cookie = drain_message(ctrl_ref)?;
                                 test.transition(TestState::ParamExchange);
                                 send_state(ctrl_ref, TestState::ParamExchange);
                             }
                         }
                         TestState::ParamExchange => {
                             if event.is_readable() {
-                                let ctrl_ref = self.ctrl.as_ref().unwrap();
-                                let buf = read_socket(ctrl_ref).await?;
+                                let ctrl_ref = self.ctrl.as_mut().unwrap();
+                                let buf = drain_message(ctrl_ref)?;
                                 test.set_settings(buf);
                                 if test.verbose() {
                                     println!("\tCookie: {}", test.cookie);
@@ -172,9 +162,20 @@ impl ServerImpl {
                             // the client is shutdown unplanned -> Err
                             // and when client sends TestEnd -> Ok
                             if event.is_readable() {
-                                let ctrl_ref = self.ctrl.as_ref().unwrap();
-                                let state = match read_socket(ctrl_ref).await {
-                                    Ok(buf) => TestState::from_i8(buf.as_bytes()[0] as i8),
+                                let ctrl_ref = self.ctrl.as_mut().unwrap();
+                                let state = match drain_message(ctrl_ref) {
+                                    Ok(buf) => match buf.len() {
+                                        1 => TestState::from_i8(buf.as_bytes()[0] as i8),
+                                        _ => {
+                                            println!(
+                                                "Invalid message: buf {}, len {}",
+                                                buf,
+                                                buf.len()
+                                            );
+                                            test.end(&mut poll);
+                                            TestState::End
+                                        }
+                                    },
                                     Err(_) => {
                                         test.end(&mut poll);
                                         TestState::End
@@ -192,7 +193,7 @@ impl ServerImpl {
                         TestState::ExchangeResults => {
                             let json = test.results();
                             if test.debug() {
-                                println!("{}", json);
+                                println!("{} {}", json, json.len());
                             }
                             self.ctrl.as_mut().unwrap().write(json.as_bytes())?;
                             test.transition(TestState::End);
@@ -334,10 +335,18 @@ impl ServerImpl {
                                             count += 1;
                                         }
                                     }
-                                    _ => {
+                                    Conn::TCP => {
                                         let pstream = &mut test.streams[token.0];
-                                        let mut buf = [0; 32];
-                                        let n = pstream.read(&mut buf)?;
+                                        let t: &mut TcpStream = (&mut pstream.stream).into();
+                                        let n = drain_message(t)?;
+                                        if test.debug {
+                                            println!("Cookie: {:?}", n);
+                                        }
+                                    }
+                                    Conn::UDP => {
+                                        let pstream = &mut test.streams[token.0];
+                                        let u: &mut UdpSocket = (&mut pstream.stream).into();
+                                        let n = drain_message(u)?;
                                         if test.debug {
                                             println!("Cookie: {:?}", n);
                                         }

@@ -36,7 +36,7 @@ impl ClientImpl {
         let ctrl = crate::tcp::connect(addr)?;
         set_nodelay(&ctrl);
         set_linger(&ctrl);
-        set_nonblocking(&ctrl, false);
+        set_nonblocking(&ctrl, true);
         println!("Control Connection MSS: {}", crate::tcp::mss(&ctrl));
 
         Ok(ClientImpl {
@@ -50,7 +50,7 @@ impl ClientImpl {
     // and responds with data as necessitated.
     //
     // The ClientImpl holds no state and all state is managed within Test.
-    // Except for TestRunning, all other states are managed by the ctrl
+    // Except for TestRunning, all other states are handled by the ctrl
     // connection.
     pub async fn run(&mut self, mut test: Test) -> io::Result<()> {
         let mut poll = Poll::new().unwrap();
@@ -95,21 +95,31 @@ impl ClientImpl {
                         TestState::Start => {
                             if event.is_writable() {
                                 write_socket(&self.ctrl, make_cookie().as_bytes())?;
-                                test.transition(TestState::Wait);
+                                test.transition(TestState::ParamExchange);
                             }
                         }
                         TestState::ParamExchange => {
+                            if event.is_readable() {
+                                drain_message(&mut self.ctrl)?;
+                            }
                             // Send params
                             write_socket(&self.ctrl, test.settings().as_bytes())?;
-                            test.transition(TestState::Wait);
+                            test.transition(TestState::CreateStreams);
                         }
                         TestState::CreateStreams => {
+                            if event.is_readable() {
+                                drain_message(&mut self.ctrl)?;
+                            }
                             for _ in 0..test.num_streams() {
                                 thread::sleep(Duration::from_millis(10));
                                 match test.conn() {
                                     Conn::UDP => {
-                                        let stream =
-                                            UdpSocket::bind("[::]:0".parse().unwrap()).unwrap();
+                                        let ip = if self.server_addr.is_ipv4() {
+                                            "0.0.0.0:0"
+                                        } else {
+                                            "[::]:0"
+                                        };
+                                        let stream = UdpSocket::bind(ip.parse().unwrap()).unwrap();
                                         stream.connect(self.server_addr).unwrap();
                                         stream.send("hello".as_bytes())?;
                                         stream.print_new_stream();
@@ -131,9 +141,12 @@ impl ClientImpl {
                                     }
                                 }
                             }
-                            test.transition(TestState::Wait);
+                            test.transition(TestState::TestStart);
                         }
                         TestState::TestStart => {
+                            if event.is_readable() {
+                                drain_message(&mut self.ctrl)?;
+                            }
                             match test.conn() {
                                 Conn::QUIC => {
                                     thread::sleep(Duration::from_millis(10));
@@ -169,33 +182,38 @@ impl ClientImpl {
                                     }
                                 }
                             }
-                            test.transition(TestState::Wait);
+                            test.transition(TestState::TestRunning);
                         }
                         TestState::TestRunning => {
-                            if self.running {
-                                // this state for this token can only be hit if the server is shutdown unplanned
-                                test.end(&mut poll);
-                                test.print_stats();
-                                return Ok(());
-                            } else {
-                                self.running = true;
-                                test.header();
-                                for pstream in &mut test.streams {
-                                    pstream.stream.register(&mut poll, STREAM);
+                            if event.is_readable() {
+                                if self.running {
+                                    // this state for this token can only be hit if the server is shutdown unplanned
+                                    if test.debug() {
+                                        println!("Remote error, ending test");
+                                    }
+                                    test.end(&mut poll);
+                                    test.print_stats();
+                                    return Ok(());
+                                } else {
+                                    if event.is_readable() {
+                                        drain_message(&mut self.ctrl)?;
+                                    }
+                                    self.running = true;
+                                    test.header();
+                                    for pstream in &mut test.streams {
+                                        pstream.stream.register(&mut poll, STREAM);
+                                    }
+                                    test.start();
                                 }
-                                test.start();
                             }
                         }
                         TestState::ExchangeResults => {
                             if event.is_readable() {
-                                let json = match read_socket(&self.ctrl).await {
+                                let json = match drain_message(&mut self.ctrl) {
                                     Ok(buf) => buf,
                                     Err(_) => continue,
                                 };
-                                if test.debug() {
-                                    println!("{}", json);
-                                }
-                                test.from_serde(json);
+                                test.from_serde(json.trim().to_string());
                                 test.transition(TestState::End);
                                 send_state(&self.ctrl, TestState::End);
                                 waker.wake()?;
@@ -208,10 +226,10 @@ impl ClientImpl {
                         }
                         TestState::TestEnd | TestState::Wait => {
                             if event.is_readable() {
-                                let buf = read_socket(&self.ctrl).await?;
+                                let buf = drain_message(&mut self.ctrl)?;
                                 let state = TestState::from_i8(buf.as_bytes()[0] as i8);
                                 test.transition(state);
-                                waker.wake()?;
+                                // waker.wake()?;
                             }
                         }
                     },

@@ -336,22 +336,6 @@ impl PerfStream {
         self.temp.blks = 0;
     }
     #[inline]
-    pub fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        match self.stream.read(buf) {
-            Ok(0) => {
-                // println!("Zero bytes read");
-                return Ok(0);
-            }
-            Ok(n) => {
-                return Ok(n);
-            }
-            Err(e) => {
-                // println!("{:?}", e);
-                return Err(e);
-            }
-        }
-    }
-    #[inline]
     pub fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         match self.stream.write(buf) {
             Ok(n) => {
@@ -457,7 +441,7 @@ impl Test {
             data: StreamData::default(),
             peer_elapsed: 0.0,
             peer: StreamData::default(),
-            peer_mode: StreamMode::SENDER,
+            peer_mode: StreamMode::RECEIVER,
             metrics: Metrics::default(),
         }
     }
@@ -515,7 +499,13 @@ impl Test {
         self.state = state;
     }
     pub fn from_serde(&mut self, json: String) {
-        let t: Test = serde_json::from_str(&json).unwrap();
+        let t: Test = match serde_json::from_str(&json) {
+            Ok(s) => s,
+            Err(_) => {
+                println!("Invalid results {}", json);
+                return;
+            }
+        };
         self.peer_streams = t.streams;
         self.peer_elapsed = t.elapsed;
         self.peer.bytes = t.data.bytes;

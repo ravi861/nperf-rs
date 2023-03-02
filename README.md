@@ -1,9 +1,12 @@
 # nperf
-A network performance measurement tool for TCP/UDP/QUIC protocols. Similar to iperf3 in usage.
+A portable network performance measurement tool for TCP/UDP/QUIC protocols. Similar to iperf3 in usage.
+
+Supported on Linux and Windows. (macos coming soon)
 
 QUIC protocol testing uses the [quinn](https://github.com/quinn-rs/quinn) QUIC implementation. Future support for [Quiche](https://github.com/cloudflare/quiche) is WIP.
 
 ## Differences to iperf3
+- nperf works on Windows
 - QUIC is newly supported in nperf
 - Some CLI options yet to be supported in nperf and some are WIP
 - SCTP is unsupported
