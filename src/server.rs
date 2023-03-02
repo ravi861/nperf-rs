@@ -193,7 +193,7 @@ impl ServerImpl {
                         TestState::ExchangeResults => {
                             let json = test.results();
                             if test.debug() {
-                                println!("{}", json);
+                                println!("{} {}", json, json.len());
                             }
                             self.ctrl.as_mut().unwrap().write(json.as_bytes())?;
                             test.transition(TestState::End);

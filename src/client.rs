@@ -210,7 +210,7 @@ impl ClientImpl {
                                     Err(_) => continue,
                                 };
                                 if test.debug() {
-                                    println!("{}", json);
+                                    println!("{} {}", json, json.len());
                                 }
                                 std::thread::sleep(Duration::from_secs(1));
                                 test.from_serde(json.trim().to_string());
