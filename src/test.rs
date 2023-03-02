@@ -336,22 +336,6 @@ impl PerfStream {
         self.temp.blks = 0;
     }
     #[inline]
-    pub fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        match self.stream.read(buf) {
-            Ok(0) => {
-                // println!("Zero bytes read");
-                return Ok(0);
-            }
-            Ok(n) => {
-                return Ok(n);
-            }
-            Err(e) => {
-                // println!("{:?}", e);
-                return Err(e);
-            }
-        }
-    }
-    #[inline]
     pub fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         match self.stream.write(buf) {
             Ok(n) => {

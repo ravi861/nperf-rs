@@ -100,7 +100,7 @@ impl ClientImpl {
                         }
                         TestState::ParamExchange => {
                             if event.is_readable() {
-                                drain_message(&self.ctrl)?;
+                                drain_message(&mut self.ctrl)?;
                             }
                             // Send params
                             write_socket(&self.ctrl, test.settings().as_bytes())?;
@@ -108,7 +108,7 @@ impl ClientImpl {
                         }
                         TestState::CreateStreams => {
                             if event.is_readable() {
-                                drain_message(&self.ctrl)?;
+                                drain_message(&mut self.ctrl)?;
                             }
                             for _ in 0..test.num_streams() {
                                 thread::sleep(Duration::from_millis(10));
@@ -145,7 +145,7 @@ impl ClientImpl {
                         }
                         TestState::TestStart => {
                             if event.is_readable() {
-                                drain_message(&self.ctrl)?;
+                                drain_message(&mut self.ctrl)?;
                             }
                             match test.conn() {
                                 Conn::QUIC => {
@@ -196,7 +196,7 @@ impl ClientImpl {
                                     return Ok(());
                                 } else {
                                     if event.is_readable() {
-                                        drain_message(&self.ctrl)?;
+                                        drain_message(&mut self.ctrl)?;
                                     }
                                     self.running = true;
                                     test.header();
@@ -209,7 +209,7 @@ impl ClientImpl {
                         }
                         TestState::ExchangeResults => {
                             if event.is_readable() {
-                                let json = match drain_message(&self.ctrl) {
+                                let json = match drain_message(&mut self.ctrl) {
                                     Ok(buf) => buf,
                                     Err(_) => continue,
                                 };
@@ -226,7 +226,7 @@ impl ClientImpl {
                         }
                         TestState::TestEnd | TestState::Wait => {
                             if event.is_readable() {
-                                let buf = drain_message(&self.ctrl)?;
+                                let buf = drain_message(&mut self.ctrl)?;
                                 let state = TestState::from_i8(buf.as_bytes()[0] as i8);
                                 test.transition(state);
                                 // waker.wake()?;

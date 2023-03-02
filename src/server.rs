@@ -107,7 +107,7 @@ impl ServerImpl {
                         }
                         TestState::ParamExchange => {
                             if event.is_readable() {
-                                let ctrl_ref = self.ctrl.as_ref().unwrap();
+                                let ctrl_ref = self.ctrl.as_mut().unwrap();
                                 let buf = drain_message(ctrl_ref)?;
                                 test.set_settings(buf);
                                 if test.verbose() {
@@ -162,7 +162,7 @@ impl ServerImpl {
                             // the client is shutdown unplanned -> Err
                             // and when client sends TestEnd -> Ok
                             if event.is_readable() {
-                                let ctrl_ref = self.ctrl.as_ref().unwrap();
+                                let ctrl_ref = self.ctrl.as_mut().unwrap();
                                 let state = match drain_message(ctrl_ref) {
                                     Ok(buf) => match buf.len() {
                                         1 => TestState::from_i8(buf.as_bytes()[0] as i8),
@@ -337,16 +337,16 @@ impl ServerImpl {
                                     }
                                     Conn::TCP => {
                                         let pstream = &mut test.streams[token.0];
-                                        let t: &TcpStream = (&pstream.stream).into();
-                                        let n = drain_message(&t)?;
+                                        let t: &mut TcpStream = (&mut pstream.stream).into();
+                                        let n = drain_message(t)?;
                                         if test.debug {
                                             println!("Cookie: {:?}", n);
                                         }
                                     }
                                     Conn::UDP => {
                                         let pstream = &mut test.streams[token.0];
-                                        let u: &UdpSocket = (&pstream.stream).into();
-                                        let n = drain_udp_message(&u)?;
+                                        let u: &mut UdpSocket = (&mut pstream.stream).into();
+                                        let n = drain_message(u)?;
                                         if test.debug {
                                             println!("Cookie: {:?}", n);
                                         }

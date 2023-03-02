@@ -10,12 +10,6 @@
 //!
 //! `nperf` is a network performance measurement tool for TCP/UDP/QUIC protocols. Similar to iperf3 in usage.
 //!
-//! ## Differences to iperf3
-//! - QUIC is newly supported in nperf
-//! - Some CLI options yet to be supported in nperf and some are WIP
-//! - SCTP is unsupported
-//! - No support for --bidir
-//!
 //! ## Usage
 //! More options available via help.
 //!
@@ -46,11 +40,6 @@
 //! ```bash
 //! cargo run -- -u -P 2 -t 30
 //! ```
-//!
-//! ## Future
-//! - Support for TCP congestion algorithm, send/recv buffer sizes
-//! - More performance metrics like rtt, retransmits, congestion window, etc
-//! - More performance and configuration options for QUIC
 //!
 
 use futures::executor::block_on;
