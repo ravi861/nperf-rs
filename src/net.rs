@@ -31,20 +31,32 @@ pub fn write_socket(mut stream: &TcpStream, buf: &[u8]) -> io::Result<usize> {
     }
 }
 
-pub async fn read_socket(mut stream: &TcpStream) -> io::Result<String> {
-    let mut buf = [0; 128 * 1024];
+pub fn read_socket(mut stream: &TcpStream) -> io::Result<String> {
+    let mut buf = [0; 8192];
     match stream.read(&mut buf) {
         Ok(0) => {
             // println!("Zero bytes read");
             return Err(Error::last_os_error());
         }
         Ok(n) => {
-            let data = String::from_utf8(buf[0..n].to_vec()).unwrap().to_string();
+            let data = String::from_utf8(buf[0..n].to_vec()).unwrap();
             return Ok(data);
         }
         Err(e) => {
             // println!("Some error {}", e);
             return Err(e.into());
+        }
+    }
+}
+
+pub fn drain_message(stream: &TcpStream) -> io::Result<String> {
+    let mut buf = String::new();
+    loop {
+        match read_socket(stream) {
+            Ok(data) => {
+                buf += &data;
+            }
+            Err(_) => return Ok(buf),
         }
     }
 }

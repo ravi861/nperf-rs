@@ -73,7 +73,7 @@ impl ServerImpl {
         println!("Accepted ctrl connection from {}", stream.peer_addr()?);
         set_nodelay(&stream);
         set_linger(&stream);
-        set_nonblocking(&stream, false);
+        set_nonblocking(&stream, true);
         self.ctrl = Some(stream);
         poll.registry().register(
             self.ctrl.as_mut().unwrap(),
@@ -118,7 +118,7 @@ impl ServerImpl {
                         TestState::ParamExchange => {
                             if event.is_readable() {
                                 let ctrl_ref = self.ctrl.as_ref().unwrap();
-                                let buf = read_socket(ctrl_ref).await?;
+                                let buf = drain_message(ctrl_ref)?;
                                 test.set_settings(buf);
                                 if test.verbose() {
                                     println!("\tCookie: {}", test.cookie);
@@ -173,8 +173,20 @@ impl ServerImpl {
                             // and when client sends TestEnd -> Ok
                             if event.is_readable() {
                                 let ctrl_ref = self.ctrl.as_ref().unwrap();
-                                let state = match read_socket(ctrl_ref).await {
-                                    Ok(buf) => TestState::from_i8(buf.as_bytes()[0] as i8),
+                                let state = match drain_message(ctrl_ref) {
+                                    Ok(buf) => match buf.len() {
+                                        1 => TestState::from_i8(buf.as_bytes()[0] as i8),
+                                        _ => {
+                                            println!(
+                                                "Invalid message: state {:?}, buf {}, len {}",
+                                                test.state(),
+                                                buf,
+                                                buf.len()
+                                            );
+                                            test.end(&mut poll);
+                                            TestState::End
+                                        }
+                                    },
                                     Err(_) => {
                                         test.end(&mut poll);
                                         TestState::End

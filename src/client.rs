@@ -36,7 +36,7 @@ impl ClientImpl {
         let ctrl = crate::tcp::connect(addr)?;
         set_nodelay(&ctrl);
         set_linger(&ctrl);
-        set_nonblocking(&ctrl, false);
+        set_nonblocking(&ctrl, true);
         println!("Control Connection MSS: {}", crate::tcp::mss(&ctrl));
 
         Ok(ClientImpl {
@@ -95,15 +95,21 @@ impl ClientImpl {
                         TestState::Start => {
                             if event.is_writable() {
                                 write_socket(&self.ctrl, make_cookie().as_bytes())?;
-                                test.transition(TestState::Wait);
+                                test.transition(TestState::ParamExchange);
                             }
                         }
                         TestState::ParamExchange => {
+                            if event.is_readable() {
+                                drain_message(&self.ctrl)?;
+                            }
                             // Send params
                             write_socket(&self.ctrl, test.settings().as_bytes())?;
-                            test.transition(TestState::Wait);
+                            test.transition(TestState::CreateStreams);
                         }
                         TestState::CreateStreams => {
+                            if event.is_readable() {
+                                drain_message(&self.ctrl)?;
+                            }
                             for _ in 0..test.num_streams() {
                                 thread::sleep(Duration::from_millis(10));
                                 match test.conn() {
@@ -131,9 +137,12 @@ impl ClientImpl {
                                     }
                                 }
                             }
-                            test.transition(TestState::Wait);
+                            test.transition(TestState::TestStart);
                         }
                         TestState::TestStart => {
+                            if event.is_readable() {
+                                drain_message(&self.ctrl)?;
+                            }
                             match test.conn() {
                                 Conn::QUIC => {
                                     thread::sleep(Duration::from_millis(10));
@@ -169,7 +178,7 @@ impl ClientImpl {
                                     }
                                 }
                             }
-                            test.transition(TestState::Wait);
+                            test.transition(TestState::TestRunning);
                         }
                         TestState::TestRunning => {
                             if self.running {
@@ -178,6 +187,9 @@ impl ClientImpl {
                                 test.print_stats();
                                 return Ok(());
                             } else {
+                                if event.is_readable() {
+                                    drain_message(&self.ctrl)?;
+                                }
                                 self.running = true;
                                 test.header();
                                 for pstream in &mut test.streams {
@@ -188,14 +200,15 @@ impl ClientImpl {
                         }
                         TestState::ExchangeResults => {
                             if event.is_readable() {
-                                let json = match read_socket(&self.ctrl).await {
+                                let json = match drain_message(&self.ctrl) {
                                     Ok(buf) => buf,
                                     Err(_) => continue,
                                 };
                                 if test.debug() {
                                     println!("{}", json);
                                 }
-                                test.from_serde(json);
+                                std::thread::sleep(Duration::from_secs(1));
+                                test.from_serde(json.trim().to_string());
                                 test.transition(TestState::End);
                                 send_state(&self.ctrl, TestState::End);
                                 waker.wake()?;
@@ -208,10 +221,10 @@ impl ClientImpl {
                         }
                         TestState::TestEnd | TestState::Wait => {
                             if event.is_readable() {
-                                let buf = read_socket(&self.ctrl).await?;
+                                let buf = drain_message(&self.ctrl)?;
                                 let state = TestState::from_i8(buf.as_bytes()[0] as i8);
                                 test.transition(state);
-                                waker.wake()?;
+                                // waker.wake()?;
                             }
                         }
                     },
