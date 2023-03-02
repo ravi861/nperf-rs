@@ -515,7 +515,13 @@ impl Test {
         self.state = state;
     }
     pub fn from_serde(&mut self, json: String) {
-        let t: Test = serde_json::from_str(&json).unwrap();
+        let t: Test = match serde_json::from_str(&json) {
+            Ok(s) => s,
+            Err(_) => {
+                println!("Invalid results {}", json);
+                return;
+            }
+        };
         self.peer_streams = t.streams;
         self.peer_elapsed = t.elapsed;
         self.peer.bytes = t.data.bytes;
