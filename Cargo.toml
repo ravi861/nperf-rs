@@ -27,10 +27,10 @@ socket2 = "0.4.7"
 futures = { version = "0.3", default-features = false, features = ["executor"] }
 tracing-timing = {  version = "0.6.0", default-features = false }
 tracing = { version = "0.1.2", default-features = false }
-#libc = "0.2.139"
+libc = "0.2.139"
 
-[profile.release]
-strip = true
+#[profile.release]
+#strip = true
 #codegen-units = 1
 #lto = true
 #opt-level = "z"

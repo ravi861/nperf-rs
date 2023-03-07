@@ -127,9 +127,6 @@ impl ClientImpl {
                                     }
                                     Conn::TCP => {
                                         let stream = crate::tcp::connect(self.server_addr)?;
-                                        if test.mss() > 0 {
-                                            crate::tcp::set_mss(&stream, test.mss())?;
-                                        }
                                         stream.print_new_stream();
                                         test.streams.push(PerfStream::new(stream, test.mode()));
                                     }

@@ -1,5 +1,5 @@
-use crate::{metrics::Metrics, params::PerfParams};
-use mio::{Poll, Token};
+use crate::{metrics::Metrics, params::PerfParams, tcp::print_tcp_info};
+use mio::{net::TcpStream, Poll, Token};
 use serde::{ser::SerializeStruct, Deserialize, Deserializer, Serialize, Serializer};
 use serde_json;
 #[cfg(unix)]
@@ -197,6 +197,8 @@ pub struct StreamData {
     pub bytes: u64,
     pub blks: u64,
     pub lost: u64,
+    pub retr: u32,
+    pub cwnd: u32,
 }
 impl Default for StreamData {
     fn default() -> Self {
@@ -204,6 +206,8 @@ impl Default for StreamData {
             bytes: 0,
             blks: 0,
             lost: 0,
+            retr: 0,
+            cwnd: 0,
         }
     }
 }
@@ -230,14 +234,21 @@ impl Display for IntervalStats {
 
 fn print_stat_line(data: &StreamData, mode: &StreamMode, conn: Conn) -> String {
     match mode {
-        StreamMode::SENDER => format!("{:<26}", data.blks),
+        StreamMode::SENDER => match conn {
+            Conn::TCP => format!(
+                "{:<4}    {:<18}",
+                data.retr,
+                Test::fmt_bytes(data.cwnd as f64)
+            ),
+            _ => format!("{:<26}", data.blks),
+        },
         StreamMode::RECEIVER => match conn {
             Conn::UDP => format!(
                 "{:<18}  ({:.1}%)",
                 format!("{} / {}", data.lost, data.blks),
                 (data.lost as f64 / data.blks as f64) * 100.0,
             ),
-            Conn::TCP => format!("{:<26}", data.blks),
+            Conn::TCP => format!("{:<26}", ""),
             Conn::QUIC => format!("{:<26}", data.blks),
         },
         StreamMode::BOTH => format!(""),
@@ -301,13 +312,28 @@ impl PerfStream {
                 bytes: self.temp.bytes,
                 blks: self.temp.blks,
                 lost: 0,
+                retr: 0,
+                cwnd: 0,
             },
         };
+        let mut snd_cwnd: u32 = 0;
+        let mut snd_mss: u32 = 0;
+        let mut rtt: u32 = 0;
         match self.stream.as_ref().socket_type() {
             Conn::UDP => {
                 stat.data.lost =
                     self.last_recvd_in_interval - self.first_recvd_in_interval - self.temp.blks;
                 self.first_recvd_in_interval = self.last_recvd_in_interval;
+            }
+            Conn::TCP => {
+                let t: &TcpStream = (&self.stream).into();
+                let tinfo = print_tcp_info(t);
+                snd_cwnd = tinfo.tcpi_snd_cwnd;
+                snd_mss = tinfo.tcpi_snd_mss;
+                rtt = tinfo.tcpi_rtt;
+                stat.data.retr = tinfo.tcpi_total_retrans - self.temp.retr;
+                self.temp.retr = tinfo.tcpi_total_retrans;
+                stat.data.cwnd = tinfo.tcpi_snd_cwnd * tinfo.tcpi_snd_mss;
             }
             _ => {}
         }
@@ -319,7 +345,17 @@ impl PerfStream {
             stat,
             print_stat_line(&stat.data, &self.mode, self.stream.as_ref().socket_type())
         );
+
         if debug {
+            match self.stream.as_ref().socket_type() {
+                Conn::TCP => {
+                    println!(
+                        "tcpi_snd_cwnd {} tcpi_snd_mss {} tcpi_rtt {}",
+                        snd_cwnd, snd_mss, rtt
+                    );
+                }
+                _ => {}
+            }
             println!(
                 "interval {} secs, {} bytes",
                 stat.timers.start.elapsed().as_secs_f64(),
@@ -614,6 +650,14 @@ impl Test {
                 }
                 self.data.lost = self.streams.iter().map(|s| s.data.lost).sum();
             }
+            Conn::TCP => {
+                for pstream in &mut self.streams {
+                    let t: &TcpStream = (&pstream.stream).into();
+                    let tinfo = print_tcp_info(t);
+                    pstream.data.retr = tinfo.tcpi_total_retrans;
+                }
+                self.data.retr = self.streams.iter().map(|s| s.data.retr).sum();
+            }
             _ => {}
         }
         self.elapsed = self.timers.start.elapsed().as_secs_f64();
@@ -676,11 +720,11 @@ impl Test {
         println!("");
         self.metrics.print();
     }
-    pub fn kmg(bytes: u64, dur: f64) -> String {
-        let bits = (bytes * 8) as f64;
-        let bytes = bytes as f64;
-
-        let total_bytes = if bytes >= ONE_TB as f64 {
+    pub fn fmt_bytes(bytes: f64) -> String {
+        if bytes == 0.0 {
+            return String::from("");
+        }
+        if bytes >= ONE_TB as f64 {
             format!("{:<7.2} TBytes", bytes / ONE_TB as f64)
         } else if bytes >= ONE_GB {
             format!("{:<7.2} GBytes", bytes / ONE_GB)
@@ -691,9 +735,9 @@ impl Test {
         } else {
             format!("{:<8} Bytes", bytes)
         }
-        .to_string();
-
-        let rate = if bits >= ONE_TB as f64 {
+    }
+    pub fn fmt_rate(bits: f64, dur: f64) -> String {
+        if bits >= ONE_TB as f64 {
             format!("{:<6.1} Tbits/sec", (bits / ONE_T) / dur)
         } else if bits >= ONE_GB {
             format!("{:<6.1} Gbits/sec", (bits / ONE_G) / dur)
@@ -716,9 +760,11 @@ impl Test {
             }
             format!("{:<7.1} bits/sec", r)
         }
-        .to_string();
-
-        format!("{}   {}", total_bytes, rate).to_string()
+    }
+    pub fn kmg(bytes: u64, dur: f64) -> String {
+        let bits = (bytes * 8) as f64;
+        let bytes = bytes as f64;
+        format!("{}   {}", Test::fmt_bytes(bytes), Test::fmt_rate(bits, dur)).to_string()
     }
     pub fn header(&self) {
         println!(
@@ -734,7 +780,9 @@ impl Test {
                 Conn::UDP => {
                     println!("[ FD]  Time  Transfer         Rate              Total Datagrams")
                 }
-                Conn::TCP => println!("[ FD]  Time  Transfer         Rate              Tx packets"),
+                Conn::TCP => {
+                    println!("[ FD]  Time  Transfer         Rate              Retr    Cwnd")
+                }
                 Conn::QUIC => {
                     println!("[ FD]  Time  Transfer         Rate              Total Datagrams")
                 }
@@ -743,7 +791,7 @@ impl Test {
                 Conn::UDP => {
                     println!("[ FD]  Time  Transfer         Rate              Lost/Total Datagrams")
                 }
-                Conn::TCP => println!("[ FD]  Time  Transfer         Rate              Rx packets"),
+                Conn::TCP => println!("[ FD]  Time  Transfer         Rate              "),
                 Conn::QUIC => {
                     println!("[ FD]  Time  Transfer         Rate              Total Datagrams")
                 }
