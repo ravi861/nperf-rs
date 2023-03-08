@@ -1,4 +1,6 @@
-use crate::{metrics::Metrics, params::PerfParams, tcp::print_tcp_info};
+use crate::{
+    metrics::Metrics, params::PerfParams, quic::Quic, tcp::print_tcp_info, tls::TlsEndpoint,
+};
 use mio::{net::TcpStream, Poll, Token};
 use serde::{ser::SerializeStruct, Deserialize, Deserializer, Serialize, Serializer};
 use serde_json;
@@ -92,6 +94,7 @@ pub enum Conn {
     TCP,
     UDP,
     QUIC,
+    TLS,
 }
 impl Display for Conn {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -99,6 +102,7 @@ impl Display for Conn {
             Conn::TCP => write!(f, "TCP"),
             Conn::UDP => write!(f, "UDP"),
             Conn::QUIC => write!(f, "QUIC"),
+            Conn::TLS => write!(f, "TLS"),
         }
     }
 }
@@ -108,6 +112,7 @@ impl Conn {
             0 => Conn::TCP,
             1 => Conn::UDP,
             2 => Conn::QUIC,
+            3 => Conn::TLS,
             _ => panic!("Unknown value: {}", value),
         }
     }
@@ -240,6 +245,11 @@ fn print_stat_line(data: &StreamData, mode: &StreamMode, conn: Conn) -> String {
                 data.retr,
                 Test::fmt_bytes(data.cwnd as f64)
             ),
+            Conn::TLS => format!(
+                "{:<4}    {:<18}",
+                data.retr,
+                Test::fmt_bytes(data.cwnd as f64)
+            ),
             _ => format!("{:<26}", data.blks),
         },
         StreamMode::RECEIVER => match conn {
@@ -249,6 +259,7 @@ fn print_stat_line(data: &StreamData, mode: &StreamMode, conn: Conn) -> String {
                 (data.lost as f64 / data.blks as f64) * 100.0,
             ),
             Conn::TCP => format!("{:<26}", ""),
+            Conn::TLS => format!("{:<26}", ""),
             Conn::QUIC => format!("{:<26}", data.blks),
         },
         StreamMode::BOTH => format!(""),
@@ -325,8 +336,16 @@ impl PerfStream {
                     self.last_recvd_in_interval - self.first_recvd_in_interval - self.temp.blks;
                 self.first_recvd_in_interval = self.last_recvd_in_interval;
             }
-            Conn::TCP => {
-                let t: &TcpStream = (&self.stream).into();
+            Conn::TCP | Conn::TLS => {
+                let t: &TcpStream = match self.stream.as_ref().socket_type() {
+                    Conn::TCP => (&self.stream).into(),
+                    Conn::TLS => {
+                        let tls: &TlsEndpoint = (&self.stream).into();
+                        tls.entity.get_ref()
+                    }
+                    Conn::UDP => todo!(),
+                    Conn::QUIC => todo!(),
+                };
                 let tinfo = print_tcp_info(t);
                 snd_cwnd = tinfo.tcpi_snd_cwnd;
                 snd_mss = tinfo.tcpi_snd_mss;
@@ -454,6 +473,10 @@ pub struct Test {
     peer_mode: StreamMode,
     #[serde(skip)]
     metrics: Metrics,
+    #[serde(skip)]
+    cert: Option<String>,
+    #[serde(skip)]
+    key: Option<String>,
 }
 
 impl Test {
@@ -479,6 +502,8 @@ impl Test {
             peer: StreamData::default(),
             peer_mode: StreamMode::RECEIVER,
             metrics: Metrics::default(),
+            cert: None,
+            key: None,
         }
     }
     pub fn from(param: &PerfParams) -> Test {
@@ -505,6 +530,10 @@ impl Test {
             test.settings.conn = Conn::QUIC;
             // test.settings.length = MAX_QUIC_PAYLOAD;
         }
+        if param.tls {
+            test.settings.conn = Conn::TLS;
+            // test.settings.length = MAX_UDP_PAYLOAD;
+        }
         test.settings.time = Duration::from_secs(param.time);
         if param.bytes > 0 {
             test.settings.bytes = param.bytes;
@@ -520,6 +549,8 @@ impl Test {
         if param.mss > 0 {
             test.settings.mss = param.mss;
         }
+        test.cert = param.cert.clone();
+        test.key = param.key.clone();
         test
     }
     pub fn reset(&mut self) {
@@ -658,7 +689,22 @@ impl Test {
                 }
                 self.data.retr = self.streams.iter().map(|s| s.data.retr).sum();
             }
-            _ => {}
+            Conn::QUIC => {
+                for pstream in &mut self.streams {
+                    let q: &Quic = (&pstream.stream).into();
+                    if self.debug {
+                        println!("{:?}", q.conn.as_ref().unwrap().stats());
+                    }
+                }
+            }
+            Conn::TLS => {
+                for pstream in &mut self.streams {
+                    let t: &TlsEndpoint = (&pstream.stream).into();
+                    let tinfo = print_tcp_info(t.entity.get_ref());
+                    pstream.data.retr = tinfo.tcpi_total_retrans;
+                }
+                self.data.retr = self.streams.iter().map(|s| s.data.retr).sum();
+            }
         }
         self.elapsed = self.timers.start.elapsed().as_secs_f64();
     }
@@ -780,7 +826,7 @@ impl Test {
                 Conn::UDP => {
                     println!("[ FD]  Time  Transfer         Rate              Total Datagrams")
                 }
-                Conn::TCP => {
+                Conn::TCP | Conn::TLS => {
                     println!("[ FD]  Time  Transfer         Rate              Retr    Cwnd")
                 }
                 Conn::QUIC => {
@@ -791,7 +837,9 @@ impl Test {
                 Conn::UDP => {
                     println!("[ FD]  Time  Transfer         Rate              Lost/Total Datagrams")
                 }
-                Conn::TCP => println!("[ FD]  Time  Transfer         Rate              "),
+                Conn::TCP | Conn::TLS => {
+                    println!("[ FD]  Time  Transfer         Rate              ")
+                }
                 Conn::QUIC => {
                     println!("[ FD]  Time  Transfer         Rate              Total Datagrams")
                 }

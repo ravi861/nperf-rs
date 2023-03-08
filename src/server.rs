@@ -1,5 +1,6 @@
 use crate::params::PerfParams;
 use crate::quic::{self, Quic};
+use crate::tls::TlsEndpoint;
 use core::panic;
 use mio::net::{TcpListener, TcpStream, UdpSocket};
 use mio::{Events, Interest, Poll, Token, Waker};
@@ -13,6 +14,7 @@ const CONTROL: Token = Token(1024);
 const TCP_LISTENER: Token = Token(1025);
 const UDP_LISTENER: Token = Token(1026);
 const QUIC_LISTENER: Token = Token(1027);
+const TLS_LISTENER: Token = Token(1028);
 const TOKEN_START: usize = 0;
 
 pub struct ServerImpl {
@@ -123,6 +125,17 @@ impl ServerImpl {
                                         poll.registry().register(
                                             self.t.as_mut().unwrap(),
                                             TCP_LISTENER,
+                                            Interest::READABLE | Interest::WRITABLE,
+                                        )?;
+                                    }
+                                    Conn::TLS => {
+                                        if test.mss() > 0 {
+                                            set_mss_listener(self.t.as_ref().unwrap(), test.mss())?;
+                                        }
+                                        // no need of a new tcp listener. Just use ctrl listener for tcp
+                                        poll.registry().register(
+                                            self.t.as_mut().unwrap(),
+                                            TLS_LISTENER,
                                             Interest::READABLE | Interest::WRITABLE,
                                         )?;
                                     }
@@ -264,6 +277,22 @@ impl ServerImpl {
                         }
                         _ => {}
                     },
+                    TLS_LISTENER => match test.state() {
+                        TestState::CreateStreams => {
+                            self.create_tls_stream(&mut poll, test).unwrap();
+
+                            if test.streams.len() > test.num_streams() as usize {
+                                panic!("Incorrect parallel streams");
+                            }
+                            if test.streams.len() == test.num_streams() as usize {
+                                let ctrl_ref = self.ctrl.as_ref().unwrap();
+                                test.transition(TestState::TestStart);
+                                send_state(ctrl_ref, TestState::TestStart);
+                                test.header();
+                            }
+                        }
+                        _ => {}
+                    },
                     token => match test.state() {
                         TestState::TestRunning => {
                             if event.is_readable() {
@@ -283,6 +312,10 @@ impl ServerImpl {
                                         Conn::TCP => {
                                             let t: &mut TcpStream = (&mut pstream.stream).into();
                                             TcpStream::read(t, &mut buf)
+                                        }
+                                        Conn::TLS => {
+                                            let t: &mut TlsEndpoint = (&mut pstream.stream).into();
+                                            t.read(&mut buf)
                                         }
                                         Conn::UDP => {
                                             let u: &mut UdpSocket = (&mut pstream.stream).into();
@@ -343,6 +376,15 @@ impl ServerImpl {
                                             println!("Cookie: {:?}", n);
                                         }
                                     }
+                                    Conn::TLS => {
+                                        let pstream = &mut test.streams[token.0];
+                                        let t: &mut TlsEndpoint = (&mut pstream.stream).into();
+                                        t.ready();
+                                        // let n = drain_message(t.entity.get_mut())?;
+                                        // if test.debug {
+                                        //     println!("Cookie: {:?}", n);
+                                        // }
+                                    }
                                     Conn::UDP => {
                                         let pstream = &mut test.streams[token.0];
                                         let u: &mut UdpSocket = (&mut pstream.stream).into();
@@ -384,6 +426,28 @@ impl ServerImpl {
             .register(&mut stream, token, Interest::READABLE)
             .unwrap();
 
+        stream.print_new_stream();
+        test.streams.push(PerfStream::new(stream, test.mode()));
+
+        // no need of a new listener (unlike udp and quic)
+        Ok(())
+    }
+
+    fn create_tls_stream(&mut self, poll: &mut Poll, test: &mut Test) -> Result<(), ()> {
+        let (mut stream, _) = self.t.as_ref().unwrap().accept().unwrap();
+
+        let token = Token(TOKEN_START + test.tokens.len());
+        test.tokens.push(token);
+        poll.registry()
+            .register(&mut stream, token, Interest::READABLE)
+            .unwrap();
+
+        let mut stream = crate::tls::TlsEndpoint::server(
+            Some(String::from("cert.key")),
+            Some(String::from("cert.crt")),
+            stream,
+        );
+        stream.handshake();
         stream.print_new_stream();
         test.streams.push(PerfStream::new(stream, test.mode()));
 
