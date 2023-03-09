@@ -1,4 +1,4 @@
-use mio::{event, net::TcpStream, Events, Interest, Poll, Registry, Token};
+use mio::{net::TcpStream, Events, Interest, Poll, Token};
 use rustls::{ClientConfig, IoState, ServerConfig};
 #[cfg(unix)]
 use std::os::unix::prelude::{AsRawFd, RawFd};
@@ -120,7 +120,7 @@ pub enum TlsEntity {
     Client(rustls::StreamOwned<rustls::ClientConnection, mio::net::TcpStream>),
 }
 impl TlsEntity {
-    pub fn is_handshaking(&mut self) -> bool {
+    fn is_handshaking(&mut self) -> bool {
         match self {
             Self::Server(server) => server.conn.is_handshaking(),
             Self::Client(client) => client.conn.is_handshaking(),
@@ -138,19 +138,19 @@ impl TlsEntity {
             Self::Server(server) => server.get_ref(),
         }
     }
-    pub fn write_tls(&mut self) -> Result<usize, io::Error> {
+    fn write_tls(&mut self) -> Result<usize, io::Error> {
         match self {
             Self::Client(client) => client.conn.write_tls(&mut client.sock),
             Self::Server(server) => server.conn.write_tls(&mut server.sock),
         }
     }
-    pub fn read_tls(&mut self) -> Result<usize, io::Error> {
+    fn read_tls(&mut self) -> Result<usize, io::Error> {
         match self {
             Self::Client(client) => client.conn.read_tls(&mut client.sock),
             Self::Server(server) => server.conn.read_tls(&mut server.sock),
         }
     }
-    pub fn process_new_packets(&mut self) -> Result<IoState, rustls::Error> {
+    fn process_new_packets(&mut self) -> Result<IoState, rustls::Error> {
         match self {
             Self::Client(client) => client.conn.process_new_packets(),
             Self::Server(server) => server.conn.process_new_packets(),
@@ -169,6 +169,7 @@ impl TlsEntity {
         }
     }
 }
+
 pub struct TlsEndpoint {
     pub entity: TlsEntity,
     closing: bool,
@@ -185,7 +186,21 @@ impl TlsEndpoint {
         ep.handshake();
         ep
     }
-    pub fn handshake(&mut self) {
+    pub fn client(stream: TcpStream) -> TlsEndpoint {
+        let sess = rustls::ClientConnection::new(
+            Arc::new(client()),
+            rustls::ServerName::IpAddress(stream.peer_addr().unwrap().ip()),
+        )
+        .unwrap();
+        let client = rustls::StreamOwned::new(sess, stream);
+        let mut ep = TlsEndpoint {
+            entity: TlsEntity::Client(client),
+            closing: false,
+        };
+        ep.handshake();
+        ep
+    }
+    fn handshake(&mut self) {
         let mut poll = Poll::new().unwrap();
         let mut events = Events::with_capacity(1024);
 
@@ -219,21 +234,7 @@ impl TlsEndpoint {
             }
         }
     }
-    pub fn client(stream: TcpStream) -> TlsEndpoint {
-        let sess = rustls::ClientConnection::new(
-            Arc::new(client()),
-            rustls::ServerName::IpAddress("127.0.0.1".parse().unwrap()),
-        )
-        .unwrap();
-        let client = rustls::StreamOwned::new(sess, stream);
-        let mut ep = TlsEndpoint {
-            entity: TlsEntity::Client(client),
-            closing: false,
-        };
-        ep.handshake();
-        ep
-    }
-    pub fn do_write(&mut self) -> io::Result<usize> {
+    fn do_write(&mut self) -> io::Result<usize> {
         self.entity.write_tls()
     }
 
@@ -345,30 +346,6 @@ impl TlsEndpoint {
     }
 }
 
-impl event::Source for TlsEndpoint {
-    fn register(
-        &mut self,
-        registry: &Registry,
-        token: Token,
-        interests: Interest,
-    ) -> io::Result<()> {
-        mio::event::Source::register(self.entity.get_mut(), registry, token, interests)
-    }
-
-    fn reregister(
-        &mut self,
-        registry: &Registry,
-        token: Token,
-        interests: Interest,
-    ) -> io::Result<()> {
-        self.entity.get_mut().reregister(registry, token, interests)
-    }
-
-    fn deregister(&mut self, registry: &Registry) -> io::Result<()> {
-        mio::event::Source::deregister(self.entity.get_mut(), registry)
-    }
-}
-
 impl Stream for TlsEndpoint {
     fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
         let send = &mut self.entity;
@@ -392,11 +369,11 @@ impl Stream for TlsEndpoint {
     }
     fn register(&mut self, poll: &mut Poll, token: Token) {
         poll.registry()
-            .register(self, token, Interest::WRITABLE)
+            .register(self.entity.get_mut(), token, Interest::WRITABLE)
             .unwrap();
     }
     fn deregister(&mut self, poll: &mut Poll) {
-        poll.registry().deregister(self).unwrap();
+        poll.registry().deregister(self.entity.get_mut()).unwrap();
     }
     fn as_any(&self) -> &dyn Any {
         self

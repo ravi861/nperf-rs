@@ -442,12 +442,11 @@ impl ServerImpl {
             .register(&mut stream, token, Interest::READABLE)
             .unwrap();
 
-        let mut stream = crate::tls::TlsEndpoint::server(
+        let stream = crate::tls::TlsEndpoint::server(
             Some(String::from("cert.key")),
             Some(String::from("cert.crt")),
             stream,
         );
-        stream.handshake();
         stream.print_new_stream();
         test.streams.push(PerfStream::new(stream, test.mode()));
 
