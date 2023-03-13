@@ -1,5 +1,6 @@
 use crate::params::PerfParams;
 use crate::quic::{self, Quic};
+use crate::tls::TlsEndpoint;
 use mio::net::{TcpStream, UdpSocket};
 use mio::{Events, Interest, Poll, Token, Waker};
 use std::net::{IpAddr, SocketAddr};
@@ -69,7 +70,7 @@ impl ClientImpl {
         // setup MSS for UDP
         let ctrl_mss = crate::tcp::mss(&self.ctrl) as usize;
         match test.conn() {
-            Conn::TCP => {
+            Conn::TCP | Conn::TLS => {
                 if test.length() == 0 {
                     test.set_length(MAX_TCP_PAYLOAD);
                 }
@@ -114,19 +115,18 @@ impl ClientImpl {
                                 thread::sleep(Duration::from_millis(10));
                                 match test.conn() {
                                     Conn::UDP => {
-                                        let ip = if self.server_addr.is_ipv4() {
-                                            "0.0.0.0:0"
-                                        } else {
-                                            "[::]:0"
-                                        };
-                                        let stream = UdpSocket::bind(ip.parse().unwrap()).unwrap();
-                                        stream.connect(self.server_addr).unwrap();
-                                        stream.send("hello".as_bytes())?;
+                                        let stream = crate::udp::connect(self.server_addr)?;
                                         stream.print_new_stream();
                                         test.streams.push(PerfStream::new(stream, test.mode()));
                                     }
                                     Conn::TCP => {
                                         let stream = crate::tcp::connect(self.server_addr)?;
+                                        stream.print_new_stream();
+                                        test.streams.push(PerfStream::new(stream, test.mode()));
+                                    }
+                                    Conn::TLS => {
+                                        let stream = crate::tcp::connect(self.server_addr)?;
+                                        let stream = crate::tls::TlsEndpoint::client(stream);
                                         stream.print_new_stream();
                                         test.streams.push(PerfStream::new(stream, test.mode()));
                                     }
@@ -172,7 +172,7 @@ impl ClientImpl {
                                         match pstream.write(make_cookie().as_bytes()) {
                                             Ok(_) => {}
                                             Err(_e) => {
-                                                println!("Failed to send cookie");
+                                                println!("Failed to send cookie {:?}", _e);
                                                 continue;
                                             }
                                         }
@@ -271,6 +271,11 @@ impl ClientImpl {
                                                 let t: &mut TcpStream =
                                                     (&mut pstream.stream).into();
                                                 TcpStream::write(t, &TCP_BUF[..len])
+                                            }
+                                            Conn::TLS => {
+                                                let t: &mut TlsEndpoint =
+                                                    (&mut pstream.stream).into();
+                                                t.write(&TCP_BUF[..len])
                                             }
                                             Conn::UDP => {
                                                 udp_buf[0..8].copy_from_slice(

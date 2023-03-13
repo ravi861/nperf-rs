@@ -77,3 +77,15 @@ impl<'a> From<&'a mut Box<dyn Stream>> for &'a mut UdpSocket {
         b
     }
 }
+
+pub fn connect(addr: std::net::SocketAddr) -> io::Result<UdpSocket> {
+    let ip = if addr.is_ipv4() {
+        "0.0.0.0:0"
+    } else {
+        "[::]:0"
+    };
+    let stream = UdpSocket::bind(ip.parse().unwrap()).unwrap();
+    stream.connect(addr).unwrap();
+    stream.send("hello".as_bytes())?;
+    Ok(stream)
+}

@@ -70,6 +70,8 @@ mod tcp;
 #[doc(hidden)]
 mod test;
 #[doc(hidden)]
+mod tls;
+#[doc(hidden)]
 mod udp;
 
 #[doc(hidden)]

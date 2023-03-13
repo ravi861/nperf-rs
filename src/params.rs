@@ -59,6 +59,7 @@ pub struct PerfParams {
     pub client: Option<String>,
     pub udp: bool,
     pub quic: bool,
+    pub tls: bool,
     pub verbose: bool,
     pub debug: bool,
     pub bindaddr: Option<String>,
@@ -76,6 +77,8 @@ pub struct PerfParams {
     pub sendbuf: u32,
     pub recvbuf: u32,
     pub skip_tls: bool,
+    pub cert: Option<String>,
+    pub key: Option<String>,
 }
 
 pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
@@ -84,6 +87,7 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
     let mut port: u16 = 8080;
     let mut udp: bool = false;
     let mut quic: bool = false;
+    let mut tls: bool = false;
     let dev: String = String::new();
     let mut bindaddr: Option<String> = None;
     let recv_timeout: u32 = DEFAULT_SESSION_TIMEOUT;
@@ -98,6 +102,8 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
     let sendbuf: u32 = 0;
     let recvbuf: u32 = 0;
     let mut skip_tls: bool = false;
+    let mut cert: Option<String> = None;
+    let mut key: Option<String> = None;
     let mut verbose = false;
     let mut debug = false;
     {
@@ -122,6 +128,8 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
             .add_option(&["-u", "--udp"], StoreTrue, "[c] Use UDP");
         args.refer(&mut quic)
             .add_option(&["-q", "--quic"], StoreTrue, "[c] Use QUIC");
+        args.refer(&mut tls)
+            .add_option(&["--tls"], StoreTrue, "[c] Use TLS");
         args.refer(&mut bindaddr).add_option(
             &["-B", "--bind-addr"],
             StoreOption,
@@ -189,6 +197,16 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
             StoreTrue,
             "[c] Disable QUIC connection encryption",
         );
+        args.refer(&mut cert).add_option(
+            &["--tls-cert"],
+            StoreOption,
+            "[s] TLS certificate file (in PEM format) path",
+        );
+        args.refer(&mut key).add_option(
+            &["--tls-key"],
+            StoreOption,
+            "[s] TLS key file (in DER format) path",
+        );
         args.refer(&mut verbose).add_option(
             &["-V", "--verbose"],
             StoreTrue,
@@ -217,6 +235,7 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
         client,
         udp,
         quic,
+        tls,
         verbose,
         debug,
         bindaddr,
@@ -234,6 +253,8 @@ pub fn parse_args() -> Result<PerfParams, io::ErrorKind> {
         sendbuf,
         recvbuf,
         skip_tls,
+        cert,
+        key,
     };
     Ok(params)
 }
