@@ -1,5 +1,5 @@
 # nperf
-A portable network performance measurement tool for TCP/UDP/QUIC protocols. Similar to iperf3 in usage.
+A portable network performance measurement tool for TCP/UDP/QUIC/TLS protocols. Similar to iperf3 in usage.
 
 Supported on Linux and Windows. (macos coming soon)
 
@@ -8,6 +8,7 @@ QUIC protocol testing uses the [quinn](https://github.com/quinn-rs/quinn) QUIC i
 ## Differences to iperf3
 - nperf works on Windows
 - QUIC is newly supported in nperf
+- TLS (tls over tcp) is newly supported in nperf
 - Some CLI options yet to be supported in nperf and some are WIP
 - SCTP is unsupported
 - No support for --bidir
@@ -27,6 +28,9 @@ cargo run -- -s
 cargo run --
 cargo run -- -c 127.0.0.1
 
+# Test TSL performance
+cargo run -- --tls
+
 # Test UDP performance
 cargo run -- -u
 
@@ -38,6 +42,5 @@ cargo run -- -u -P 2 -t 30
 ```
 
 ## Future
-- Support for TCP congestion algorithm, send/recv buffer sizes
-- More performance metrics like rtt, retransmits, congestion window, etc
+- Support for send/recv buffer sizes
 - More performance and configuration options for QUIC
