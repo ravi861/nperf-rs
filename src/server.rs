@@ -379,11 +379,10 @@ impl ServerImpl {
                                     Conn::TLS => {
                                         let pstream = &mut test.streams[token.0];
                                         let t: &mut TlsEndpoint = (&mut pstream.stream).into();
-                                        t.ready();
-                                        // let n = drain_message(t.entity.get_mut())?;
-                                        // if test.debug {
-                                        //     println!("Cookie: {:?}", n);
-                                        // }
+                                        let n = drain_message(t)?;
+                                        if test.debug {
+                                            println!("Cookie: {:?}", n);
+                                        }
                                     }
                                     Conn::UDP => {
                                         let pstream = &mut test.streams[token.0];

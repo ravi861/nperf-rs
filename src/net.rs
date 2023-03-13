@@ -31,7 +31,7 @@ pub fn write_socket(mut stream: &TcpStream, buf: &[u8]) -> io::Result<usize> {
     }
 }
 
-pub fn drain_message<T: Stream + AsRawFd + 'static>(stream: &mut T) -> io::Result<String> {
+pub fn drain_message<T: Stream + 'static>(stream: &mut T) -> io::Result<String> {
     let mut buf = String::new();
     loop {
         let mut data = [0; 8192];
